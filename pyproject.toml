@@ -1,0 +1,23 @@
+[project]
+name = "story-video"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.142.2",
+    "huggingface-hub[hf-xet]>=1.33.0",
+    "mlx-audio>=0.5.8",
+    "pillow>=12.3.0",
+    "python-dotenv>=1.2.4",
+    "python-multipart>=0.0.32",
+    "resemblyzer>=0.1.4",
+    "setuptools<81",
+    "soundfile>=0.14.0",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["storyvid"]

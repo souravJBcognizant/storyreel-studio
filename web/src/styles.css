@@ -1,0 +1,118 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/fraunces";
+@import "@fontsource-variable/jetbrains-mono";
+@import "@xyflow/react/dist/style.css";
+
+/* Storyreel design tokens — a warm, low-glare studio palette (golden-hour accent on charcoal). */
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fraunces Variable", ui-serif, Georgia, serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, monospace;
+
+  --color-ink-950: #0a0908;
+  --color-ink-900: #0f0e0c;
+  --color-ink-850: #141210;
+  --color-ink-800: #1a1815;
+  --color-ink-750: #211e1a;
+  --color-ink-700: #2a2722;
+  --color-ink-600: #3a352e;
+  --color-ink-500: #4d473e;
+
+  --color-fg: #f4efe7;
+  --color-fg-2: #c2baae;
+  --color-fg-3: #8a8277;
+  --color-fg-4: #5f594f;
+
+  --color-amber: #f3a93c;
+  --color-amber-hi: #ffc261;
+  --color-amber-lo: #b9761c;
+
+  --color-ok: #5bc98a;
+  --color-bad: #ef6c5c;
+  --color-warn: #e8c154;
+  --color-info: #7fa9ea;
+
+  /* One hue per engine, used in tags, graph edges and the stage rail. */
+  --color-engine-claude: #e3895f;
+  --color-engine-openai: #6fcaa3;
+  --color-engine-ltx: #97a3f2;
+  --color-engine-ffmpeg: #cdb57b;
+  --color-engine-user: #c2baae;
+
+  --radius-card: 14px;
+  --shadow-card: 0 1px 0 0 rgb(255 245 230 / 0.04) inset, 0 18px 40px -24px rgb(0 0 0 / 0.7);
+  --shadow-pop: 0 24px 60px -20px rgb(0 0 0 / 0.75), 0 0 0 1px rgb(255 240 220 / 0.08);
+
+  --animate-pulse-soft: pulse-soft 1.8s ease-in-out infinite;
+  --animate-shimmer: shimmer 2.2s linear infinite;
+  --animate-rise: rise 0.35s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to { background-position: 200% 0; }
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@layer base {
+  html { color-scheme: dark; }
+  body {
+    @apply bg-ink-950 font-sans text-fg antialiased;
+    font-feature-settings: "cv11", "ss01", "ss03";
+    background-image:
+      radial-gradient(1200px 600px at 85% -10%, rgb(243 169 60 / 0.07), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgb(151 163 242 / 0.05), transparent 60%);
+    background-attachment: fixed;
+  }
+  /* Faint film grain over everything — texture without noise. */
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 60;
+    opacity: 0.035;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  }
+  ::selection { background: rgb(243 169 60 / 0.35); }
+  * { scrollbar-width: thin; scrollbar-color: var(--color-ink-600) transparent; }
+  :focus-visible { outline: 2px solid var(--color-amber); outline-offset: 2px; border-radius: 6px; }
+}
+
+@layer components {
+  .card {
+    @apply rounded-[var(--radius-card)] border border-white/[0.06] bg-ink-850/80 shadow-[var(--shadow-card)] backdrop-blur-sm;
+  }
+  .card-raised {
+    @apply rounded-[var(--radius-card)] border border-white/[0.07] bg-ink-800 shadow-[var(--shadow-card)];
+  }
+  .eyebrow {
+    @apply font-mono text-[10.5px] font-medium tracking-[0.14em] text-fg-3 uppercase;
+  }
+  .skeleton {
+    background: linear-gradient(90deg, var(--color-ink-800) 0%, var(--color-ink-700) 50%, var(--color-ink-800) 100%);
+    background-size: 200% 100%;
+    @apply animate-shimmer rounded-lg;
+  }
+  .hairline { @apply border-white/[0.06]; }
+}
+
+/* React Flow, re-skinned for the studio. */
+.react-flow { --xy-background-color: transparent; }
+.react-flow__attribution { display: none; }
+.react-flow__controls {
+  @apply overflow-hidden rounded-lg border border-white/10 bg-ink-800 shadow-[var(--shadow-pop)];
+}
+.react-flow__controls-button {
+  @apply border-b border-white/[0.06] bg-ink-800 text-fg-2 hover:bg-ink-700;
+}
+.react-flow__controls-button svg { fill: currentColor; }
+.react-flow__edge-path { stroke-linecap: round; }

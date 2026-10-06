@@ -1,0 +1,22 @@
+# Secrets — API keys live here and are never committed
+.env
+
+# Python / Node
+.venv/
+__pycache__/
+*.pyc
+web/node_modules/
+web/dist/
+
+# Large local assets (see README for how to fetch them)
+models/
+ltx-2-mlx/
+.cache/
+
+# Generated media, renders and logs
+productions/
+stage0/out/
+stage1/out/
+*.log
+
+.DS_Store

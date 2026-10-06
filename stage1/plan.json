@@ -1,0 +1,116 @@
+{
+  "title": "Elio's First Flight",
+  "fps": 24,
+  "width": 768,
+  "height": 512,
+  "style": "A 3D animated stylized cartoon scene in a warm, colorful animated-feature style",
+  "characters": {
+    "elio": {
+      "bible": "A 3D animated stylized cartoon character in a warm, colorful animated-feature style. Elio, a cheerful young inventor with messy copper-red hair, big round green eyes, freckles, round brass goggles pushed up on his forehead and an oversized mustard-yellow raincoat",
+      "voice_phrase": "in a bright, warm, boyish voice",
+      "canonical_image": "../stage0/out/ltx/character_ref.png",
+      "voice_refs": [
+        "../stage0/out/ltx/joint_line1_nervous.wav",
+        "../stage0/out/ltx/joint_line2_excited.wav",
+        "../stage0/out/ltx/joint_line3_worried.wav",
+        "../stage0/out/ltx/drift/workshop.wav",
+        "../stage0/out/ltx/drift/rain.wav",
+        "../stage0/out/ltx/drift/hill.wav",
+        "../stage0/out/ltx/drift/frustrated.wav"
+      ],
+      "head_query": "a cartoon boy's head"
+    }
+  },
+  "props": {
+    "machine": "a small homemade flying machine made of brass and wood, with patched canvas wings and a single wooden propeller"
+  },
+  "scenes": [
+    {
+      "id": "workshop",
+      "setting": "in his cluttered workshop at night, lit by a warm desk lamp, tools and blueprints everywhere",
+      "audio": "the faint ticking of clocks",
+      "shots": [
+        {
+          "id": "w1",
+          "start": "fresh",
+          "character": "elio",
+          "seconds": 4,
+          "action": "Elio sits hunched over his workbench, carefully tightening a tiny screw with a little screwdriver. On the bench in front of him is {machine}. His tongue pokes out in concentration.",
+          "camera": "Medium close-up, slow push-in."
+        },
+        {
+          "id": "w2",
+          "start": "continue",
+          "character": "elio",
+          "action": "Elio lifts the machine up into the lamplight, his eyes shining, and says softly",
+          "line": "Tomorrow, you're going to fly.",
+          "camera": "Static camera."
+        }
+      ]
+    },
+    {
+      "id": "beach",
+      "setting": "on a sandy beach at golden hour, with the calm ocean behind",
+      "audio": "the soft sound of waves",
+      "shots": [
+        {
+          "id": "b1",
+          "start": "anchor",
+          "image": "../stage0/out/ltx/character_ref.png",
+          "character": "elio",
+          "seconds": 4,
+          "action": "Elio stands facing the camera, grinning, then proudly brings out from behind his back {machine}, holding it up with both hands.",
+          "camera": "Medium close-up, static camera."
+        },
+        {
+          "id": "b2",
+          "start": "continue",
+          "character": "elio",
+          "action": "Elio kneels and sets the machine down on the sand, takes a deep breath and says nervously",
+          "line": "Okay, okay... deep breath. Three, two, one!",
+          "camera": "The camera follows him down."
+        },
+        {
+          "id": "b3",
+          "start": "fresh",
+          "seconds": 4,
+          "action": "Close on {machine} resting on the sand. Its propeller whirs to life, and it wobbles, lifts off and climbs into the golden sky.",
+          "camera": "Low angle, the camera tilts up to follow it."
+        },
+        {
+          "id": "b4",
+          "start": "continue",
+          "from": "b2",
+          "character": "elio",
+          "action": "Elio leaps to his feet, looks up at the sky, throws his arms in the air and shouts excitedly",
+          "line": "It works! It actually works!",
+          "camera": "Static camera."
+        }
+      ]
+    },
+    {
+      "id": "cliff",
+      "setting": "on a grassy cliff top overlooking the sea at sunset, the sky glowing orange and pink",
+      "audio": "a gentle breeze and distant seagulls",
+      "shots": [
+        {
+          "id": "c1",
+          "start": "fresh",
+          "character": "elio",
+          "action": "Elio stands at the edge of the cliff, shading his eyes with one hand as he watches the tiny flying machine circle high above the sea, then smiles and says softly",
+          "line": "Fly far, little one.",
+          "camera": "Medium shot, slow push-in."
+        },
+        {
+          "id": "c2",
+          "start": "fresh",
+          "character": "elio",
+          "identity_check": false,
+          "seconds": 5,
+          "action": "Wide shot: the small silhouette of Elio on the cliff top against a huge setting sun, the tiny flying machine a dark speck circling in the sky above him.",
+          "camera": "Static camera, very slow zoom out."
+        }
+      ]
+    }
+  ]
+}
