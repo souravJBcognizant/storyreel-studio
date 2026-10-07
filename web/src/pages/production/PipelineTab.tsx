@@ -1,9 +1,11 @@
 import { Anchor, Clapperboard, Flag, Hourglass, Link2, Plug, Sparkles } from "lucide-react";
 import { useState } from "react";
+import { useSearchParams } from "react-router";
 import { ShotGraph } from "../../components/pipeline/ShotGraph";
 import { StageDetail, StageRail } from "../../components/pipeline/StageRail";
 import { Button, EngineTag, ProgressBar, SectionTitle, Stat } from "../../components/ui";
 import { thumbUrl, type Production, type Stage } from "../../lib/api";
+import { CastPanel, KeyframesPanel, NextStep, SheetsPanel, VoiceClips, VoicesPanel } from "./Preproduction";
 import { clock, duration, pct } from "../../lib/format";
 
 export function PipelineTab({ p, onOpenShot, onRender }: { p: Production; onOpenShot: (id: string) => void; onRender: () => void }) {
@@ -11,12 +13,14 @@ export function PipelineTab({ p, onOpenShot, onRender }: { p: Production; onOpen
     p.stages.find((s) => ["running", "queued", "awaiting_approval", "failed"].includes(s.status)) ??
     p.stages.find((s) => s.status === "pending") ??
     p.stages[p.stages.length - 1];
-  const [selected, setSelected] = useState<string | null>(null);
+  const [params] = useSearchParams();
+  const [selected, setSelected] = useState<string | null>(() => params.get("stage")); // deep link: ?tab=pipeline&stage=voice
   const stage = p.stages.find((s) => s.key === (selected ?? focus.key))!;
 
   return (
     <div className="flex flex-col gap-7">
-      {p.active_job && <LiveRender p={p} />}
+      <NextStep p={p} />
+      {p.active_job?.kind === "render" && <LiveRender p={p} />}
 
       <section className="card p-5 pb-3">
         <SectionTitle eyebrow="Pipeline" title="From story to film" right={<Legend />} />
@@ -111,12 +115,12 @@ function StageContext({ p, stage, onRender }: { p: Production; stage: Stage; onR
         </div>
       );
     case "plan":
-      return stage.status === "done" ? (
+      return stage.status === "done" || stage.status === "awaiting_approval" ? (
         <p>
           {p.scenes.length} scenes, {shots.length} shots, {shots.filter((s) => s.line).length} spoken lines. See the Plan tab for the screenplay.
         </p>
       ) : (
-        <Waiting />
+        <Waiting p={p} />
       );
     case "render":
       return stage.status === "done" || takes.length ? (
@@ -136,15 +140,29 @@ function StageContext({ p, stage, onRender }: { p: Production; stage: Stage; onR
           Render film
         </Button>
       ) : (
-        <Waiting />
+        <p className="text-fg-3">Starts once the plan, keyframes and voice are approved.</p>
+      );
+    case "analysis":
+      return p.preprod?.cast ? <CastPanel p={p} /> : stage.status === "skipped" ? <Skipped /> : <Waiting p={p} />;
+    case "sheets":
+      return p.preprod?.keyframes ? <SheetsPanel p={p} /> : stage.status === "skipped" ? <Skipped /> : <Waiting p={p} />;
+    case "keyframes":
+      return p.preprod?.keyframes && Object.keys(p.preprod.keyframes.scenes).length ? (
+        <KeyframesPanel p={p} />
+      ) : stage.status === "skipped" ? (
+        <Skipped />
+      ) : (
+        <Waiting p={p} />
       );
     case "voice":
+      if (p.preprod?.voices) return <VoicesPanel p={p} />;
+      if (p.preprod?.voice) return <VoiceClips p={p} />;
       return stage.status === "done" ? (
         <p>
           Voice locked: {p.characters.map((c) => `${c.id} — “${c.voice_phrase}”, ${c.voice_refs} approved reference takes`).join("; ")}.
         </p>
       ) : (
-        <Waiting />
+        <Waiting p={p} />
       );
     case "assemble":
     case "film":
@@ -158,20 +176,23 @@ function StageContext({ p, stage, onRender }: { p: Production; stage: Stage; onR
         </p>
       );
     default:
-      return stage.status === "skipped" ? (
-        <p className="text-fg-3">Not used for this production — the Stage 1 test started from a hand-written plan.</p>
-      ) : (
-        <Waiting />
-      );
+      return stage.status === "skipped" ? <Skipped /> : <Waiting p={p} />;
   }
 }
 
-function Waiting() {
+function Skipped() {
+  return <p className="text-fg-3">Not used for this production — it started from a hand-written plan.</p>;
+}
+
+function Waiting({ p }: { p: Production }) {
   return (
     <p className="flex items-start gap-2 rounded-lg border border-white/[0.06] bg-ink-900/60 px-3 py-2.5 text-[12.5px] text-fg-3">
       <Plug className="mt-0.5 size-3.5 shrink-0 text-engine-claude" />
-      Waits for the agent network, which is the next build step. Once the Director agent is connected, this stage runs automatically and
-      pauses here for your approval where the flag is shown.
+      {p.active_job?.kind === "preprod"
+        ? "The agents are on it — this fills in as soon as they save their work."
+        : p.can_plan
+          ? "Runs when you start “Plan with agents”, and pauses here for your approval where the flag is shown."
+          : "Not produced for this film."}
     </p>
   );
 }
@@ -179,7 +200,7 @@ function Waiting() {
 function Legend() {
   return (
     <div className="hidden items-center gap-4 lg:flex">
-      {(["claude", "openai", "ltx", "ffmpeg"] as const).map((e) => (
+      {(["claude", "openai", "ltx", "qwen", "ffmpeg"] as const).map((e) => (
         <EngineTag key={e} engine={e} />
       ))}
       <span className="flex items-center gap-1 text-[11px] text-fg-3">

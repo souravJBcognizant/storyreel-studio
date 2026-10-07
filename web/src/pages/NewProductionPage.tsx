@@ -17,9 +17,9 @@ const LENGTHS = [
 const NEXT: { label: string; engine: Engine; checkpoint?: boolean }[] = [
   { label: "Story analysis", engine: "claude" },
   { label: "Screenplay & shot plan", engine: "claude", checkpoint: true },
+  { label: "Voice casting", engine: "qwen", checkpoint: true },
   { label: "Character & prop sheets", engine: "openai" },
-  { label: "Scene keyframes", engine: "openai", checkpoint: true },
-  { label: "Voice audition", engine: "ltx", checkpoint: true },
+  { label: "Coverage keyframes", engine: "openai", checkpoint: true },
   { label: "Render & QA, then the edit", engine: "ltx" },
 ];
 
@@ -162,7 +162,9 @@ export function NewProductionPage() {
                   </button>
                 ))}
               </div>
-              <p className="mt-2 text-[11.5px] text-fg-4">About {Math.round((seconds * 67) / 60)} min of rendering on this Mac (~67 s per second of film).</p>
+              <p className="mt-2 text-[11.5px] text-fg-4">
+                About {Math.round(17 + (seconds * 50) / 60)} min on this Mac: ~17 min of planning, then ~50 s of rendering per second of film.
+              </p>
             </div>
           </div>
 

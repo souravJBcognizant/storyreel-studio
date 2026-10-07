@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import clsx from "clsx";
-import { Check, Crown, X } from "lucide-react";
+import { Check, Crown, Mic, MicOff, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Scene, Shot, Take } from "../lib/api";
 import { mediaUrl, thumbUrl } from "../lib/api";
@@ -18,8 +18,10 @@ export function ShotDrawer({
   onClose: () => void;
 }) {
   const [takeIndex, setTakeIndex] = useState<number | null>(null);
+  const [original, setOriginal] = useState(false); // dubbed takes: hear LTX's own voice instead of the cast voice
   useEffect(() => setTakeIndex(shot?.chosen ?? (shot?.takes.length ? shot.takes.length - 1 : null)), [shot?.id, shot?.chosen, shot?.takes.length]);
   const take = shot && takeIndex != null ? shot.takes.find((t) => t.index === takeIndex) ?? null : null;
+  const src = take ? (take.dub && !original ? take.dub : take.path) : null;
 
   return (
     <Dialog.Root open={!!shot} onOpenChange={(open) => !open && onClose()}>
@@ -48,17 +50,41 @@ export function ShotDrawer({
               </header>
 
               <div className="flex-1 overflow-y-auto px-6 py-5">
-                {take ? (
-                  <VideoPlayer key={take.path} src={mediaUrl(take.path)} poster={thumbUrl(take.path, 0.5, 960)} className="aspect-[3/2] w-full" autoPlay />
+                {take && src ? (
+                  <VideoPlayer key={src} src={mediaUrl(src)} poster={thumbUrl(take.path, 0.5, 960)} className="aspect-[3/2] w-full" autoPlay />
                 ) : (
                   <div className="skeleton aspect-[3/2] w-full" />
+                )}
+                {take?.dub && (
+                  <div className="mt-3 flex items-center gap-3">
+                    <div className="inline-flex rounded-lg border border-white/[0.08] bg-ink-850 p-0.5 text-[12px]">
+                      {[
+                        { on: false, icon: <Mic className="size-3.5" />, label: shot.delivery === "off" ? "Cast voice, laid over" : "Cast voice, dubbed" },
+                        { on: true, icon: <MicOff className="size-3.5" />, label: "LTX original" },
+                      ].map((o) => (
+                        <button
+                          key={o.label}
+                          onClick={() => setOriginal(o.on)}
+                          className={clsx(
+                            "inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 transition-colors",
+                            original === o.on ? "bg-white/[0.08] text-fg" : "text-fg-3 hover:text-fg-2",
+                          )}
+                        >
+                          {o.icon} {o.label}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="text-[11.5px] text-fg-4">
+                      {shot.delivery === "off" ? "Heard off screen over this picture." : "The cast voice, word by word on LTX's lip movements."}
+                    </span>
+                  </div>
                 )}
 
                 <div className="mt-5 grid gap-1 text-[13px] leading-relaxed">
                   <p className="text-fg-2">{shot.action}</p>
                   {shot.line && (
                     <p className="text-fg">
-                      <span className="text-fg-3">Line · </span>“{shot.line}”
+                      <span className="text-fg-3">{shot.delivery === "off" ? `Off camera · ${name(shot.speaker)} · ` : "Line · "}</span>“{shot.line}”
                     </p>
                   )}
                   {shot.camera && <p className="text-fg-3">{shot.camera}</p>}
@@ -104,7 +130,13 @@ export function ShotDrawer({
   );
 }
 
+function name(id: string | null) {
+  return id ? id.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "someone";
+}
+
 function TakeRow({ take, shot, chosen, active, onPick }: { take: Take; shot: Shot; chosen: boolean; active: boolean; onPick: () => void }) {
+  const dubbed = take.dub != null;
+  const speakerFailed = take.failures.some((f) => /speaker|someone/.test(f));
   return (
     <button
       onClick={onPick}
@@ -134,11 +166,27 @@ function TakeRow({ take, shot, chosen, active, onPick }: { take: Take; shot: Sho
           )}
           <span className="mx-1 text-fg-4">·</span>
           <ScoreChip metric="words" value={take.wer} />
-          <ScoreChip metric="voice" value={take.voice} />
-          {shot.identity_check && <ScoreChip metric="identity" value={take.identity} />}
-          <ScoreChip metric="continuity" value={take.continuity} />
+          {take.speaker && (
+            <span
+              title={take.speaker_note ?? undefined}
+              className={clsx(
+                "inline-flex h-[22px] items-center gap-1 rounded-md border px-1.5 text-[10.5px]",
+                speakerFailed ? "border-bad/25 bg-bad/[0.08] text-bad" : "border-ok/20 bg-ok/[0.07] text-ok",
+              )}
+            >
+              <span className="text-fg-3">Talking</span> {take.speaker}
+            </span>
+          )}
+          {take.dub_words && (
+            <span title="Words of the cast voice placed on LTX's lip movements" className="inline-flex h-[22px] items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 font-mono text-[10.5px] text-fg-2">
+              <span className="font-sans text-fg-3">Lips</span> {take.dub_words}
+            </span>
+          )}
+          <ScoreChip metric="voice" value={take.voice} info={dubbed} />
+          {shot.identity_check && <ScoreChip metric="identity" value={take.identity} info={dubbed} />}
+          <ScoreChip metric="continuity" value={take.continuity} info={dubbed} />
         </div>
-        {take.heard && <div className="mt-1 truncate text-[11px] text-fg-3">Heard: “{take.heard}”</div>}
+        {take.heard && <div className="mt-1 truncate text-[11px] text-fg-3">{dubbed ? "LTX said" : "Heard"}: “{take.heard}”</div>}
       </div>
       <div className="shrink-0 text-right font-mono text-[10.5px] text-fg-3">
         <div>{take.seconds.toFixed(1)} s</div>

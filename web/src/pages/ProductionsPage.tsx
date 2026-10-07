@@ -8,7 +8,11 @@ import { ago, clock, pct } from "../lib/format";
 
 export function productionState(p: ProductionSummary) {
   if (p.active_job?.status === "queued") return { status: "queued" as const, label: "Queued" };
+  if (p.active_job?.kind === "preprod") return { status: "running" as const, label: "Agents planning" };
+  if (p.active_job?.kind === "audition") return { status: "running" as const, label: "Voice audition" };
   if (p.active_job) return { status: "running" as const, label: p.progress ? `Rendering ${p.progress.shots_done}/${p.progress.shots_total}` : "Rendering" };
+  if (p.steps.plan === "awaiting_approval" || p.steps.keyframes === "awaiting_approval" || p.steps.voice === "awaiting_approval")
+    return { status: "awaiting_approval" as const, label: "Needs your approval" };
   if (p.steps.film === "done") return { status: "done" as const, label: "Ready to watch" };
   if (p.steps.render === "failed") return { status: "failed" as const, label: "Render failed" };
   if (p.steps.plan !== "done") return { status: "pending" as const, label: "Draft · needs a plan" };

@@ -8,9 +8,10 @@ export function clock(seconds: number | null | undefined): string {
 
 export function duration(seconds: number | null | undefined): string {
   if (seconds == null) return "—";
-  if (seconds < 60) return `${Math.round(seconds)} s`;
-  const m = Math.floor(seconds / 60);
-  if (m < 60) return `${m} min ${Math.round(seconds % 60)} s`;
+  const t = Math.round(seconds); // round once, so 119.6 s reads "2 min 0 s", not "1 min 60 s"
+  if (t < 60) return `${t} s`;
+  const m = Math.floor(t / 60);
+  if (m < 60) return `${m} min ${t % 60} s`;
   return `${Math.floor(m / 60)} h ${m % 60} min`;
 }
 

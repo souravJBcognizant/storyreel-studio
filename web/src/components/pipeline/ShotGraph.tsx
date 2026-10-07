@@ -27,7 +27,7 @@ const REF_W = 132;
 const REF_H = 112;
 const REF_COL = REF_W + 70; // left column for reference frames
 
-type ShotData = { shot: Shot; order: number; onOpen: (id: string) => void };
+type ShotData = { shot: Shot; order: number; onOpen: (id: string) => void; keyframe?: string };
 type SceneData = { scene: Scene; index: number };
 type RefData = { image: string; label: string };
 
@@ -65,7 +65,12 @@ function layout(production: Production, onOpen: (id: string) => void) {
   const widest = Math.max(...production.scenes.map((s) => s.shots.length));
   const laneW = widest * (W + GAP) - GAP + PAD * 2;
   const laneH = HEADER + H + PAD;
-  const hasRefs = production.scenes.some((s) => s.shots.some((shot) => shot.start === "anchor" && shot.image));
+  // A keyframe made for one shot (coverage: establishing frames and singles) is shown on that shot until it
+  // renders; only references several shots start from get their own node in the left column.
+  const uses = new Map<string, number>();
+  production.scenes.forEach((s) => s.shots.forEach((shot) => shot.start === "anchor" && shot.image && uses.set(shot.image, (uses.get(shot.image) ?? 0) + 1)));
+  const shared = (image: string | null) => !!image && (uses.get(image) ?? 0) > 1;
+  const hasRefs = [...uses.values()].some((n) => n > 1);
   const x0 = hasRefs ? REF_COL : 0;
   let order = 0;
 
@@ -85,7 +90,7 @@ function layout(production: Production, onOpen: (id: string) => void) {
         id: shot.id,
         type: "shot",
         position: { x: x0 + PAD + j * (W + GAP), y: y + HEADER },
-        data: { shot, order: ++order, onOpen } satisfies ShotData,
+        data: { shot, order: ++order, onOpen, keyframe: shot.start === "anchor" && shot.image && !shared(shot.image) ? shot.image : undefined } satisfies ShotData,
       });
       if (shot.start === "continue" && shot.from) {
         const skips = scene.shots.findIndex((s) => s.id === shot.from) !== j - 1;
@@ -101,8 +106,9 @@ function layout(production: Production, onOpen: (id: string) => void) {
           markerEnd: { type: MarkerType.ArrowClosed, color: "#f3a93c", width: 16, height: 16 },
         });
       }
-      if (shot.start === "anchor" && shot.image) {
-        const ref = refs.get(shot.image) ?? { y: y + HEADER + (H - REF_H - 30) / 2, targets: [] };
+      if (shot.start === "anchor" && shot.image && shared(shot.image)) {
+        const inLane = [...refs.values()].filter((r) => r.y >= y && r.y < y + laneH).length;
+        const ref = refs.get(shot.image) ?? { y: y + HEADER + inLane * (REF_H + 34), targets: [] };
         ref.targets.push(shot.id);
         refs.set(shot.image, ref);
       }
@@ -136,7 +142,7 @@ const START_ICON = { fresh: Sparkles, continue: Link2, anchor: Anchor } as const
 const START_LABEL = { fresh: "new shot", continue: "continues", anchor: "anchored" } as const;
 
 function ShotNode({ data }: NodeProps<Node<ShotData>>) {
-  const { shot, order, onOpen } = data;
+  const { shot, order, onOpen, keyframe } = data;
   const chosen = shot.chosen != null ? shot.takes[shot.chosen] : null;
   const preview = chosen ?? shot.takes[shot.takes.length - 1];
   const StartIcon = START_ICON[shot.start];
@@ -166,6 +172,13 @@ function ShotNode({ data }: NodeProps<Node<ShotData>>) {
             loading="lazy"
             className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.04]"
           />
+        ) : keyframe ? (
+          <>
+            <img src={thumbUrl(keyframe, 0, 420)} alt="" loading="lazy" className="h-full w-full object-cover opacity-60" />
+            <span className="absolute right-2 bottom-2 inline-flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white/80 backdrop-blur">
+              <ImageIcon className="size-3 text-engine-ltx" /> start frame
+            </span>
+          </>
         ) : (
           <div className={clsx("h-full w-full", shot.status === "rendering" ? "skeleton rounded-none" : "bg-ink-850")} />
         )}
@@ -199,10 +212,23 @@ function ShotNode({ data }: NodeProps<Node<ShotData>>) {
           )}
         </div>
         <div className="flex min-h-[22px] items-center gap-1">
-          {chosen?.voice != null && <ScoreChip metric="voice" value={chosen.voice} />}
-          {chosen?.identity != null && <ScoreChip metric="identity" value={chosen.identity} />}
-          {chosen && chosen.voice == null && chosen.identity == null && (
-            <span className="text-[10.5px] text-fg-4">{shot.identity_check ? "—" : "no character checks"}</span>
+          {chosen?.dub != null ? (
+            <>
+              <ScoreChip metric="words" value={chosen.wer} />
+              {chosen.dub_words && (
+                <span title="Words of the cast voice placed on the lip movements" className="inline-flex h-[22px] items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 font-mono text-[10.5px] text-fg-2">
+                  <span className="font-sans text-fg-3">Lips</span> {chosen.dub_words}
+                </span>
+              )}
+            </>
+          ) : (
+            <>
+              {chosen?.voice != null && <ScoreChip metric="voice" value={chosen.voice} />}
+              {chosen?.identity != null && <ScoreChip metric="identity" value={chosen.identity} />}
+              {chosen && chosen.voice == null && chosen.identity == null && (
+                <span className="text-[10.5px] text-fg-4">{shot.identity_check ? "—" : "no character checks"}</span>
+              )}
+            </>
           )}
         </div>
       </div>

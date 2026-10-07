@@ -86,11 +86,20 @@ function EngineCard({ active }: { active: Job[] }) {
             <Clapperboard className="size-3.5 text-amber" />
             <span className="truncate">{running.production}</span>
           </div>
-          <div className="mt-1 text-[11px] text-fg-3">
-            {p?.current_shot ? `Shot ${p.current_shot} · take ${(p.current_take ?? 0) + 1}` : p?.phase ?? "starting…"}
-            {p && ` · ${p.shots_done}/${p.shots_total}`}
-          </div>
-          <ProgressBar value={p ? pct(p.shots_done, p.shots_total) : 0} live className="mt-2" />
+          {running.kind === "render" ? (
+            <>
+              <div className="mt-1 text-[11px] text-fg-3">
+                {p?.current_shot ? `Shot ${p.current_shot} · take ${(p.current_take ?? 0) + 1}` : p?.phase ?? "starting…"}
+                {p && ` · ${p.shots_done}/${p.shots_total}`}
+              </div>
+              <ProgressBar value={p ? pct(p.shots_done, p.shots_total) : 0} live className="mt-2" />
+            </>
+          ) : (
+            <div className="mt-1 text-[11px] text-fg-3">
+              {running.kind === "preprod" ? "Agents planning" : "Voice audition"}
+              {p?.phase && p.phase !== "starting" && ` · ${p.phase}`}
+            </div>
+          )}
         </Link>
       ) : (
         <div className="mt-1.5 text-[11px] text-fg-3">

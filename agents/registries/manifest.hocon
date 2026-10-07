@@ -1,0 +1,4 @@
+{
+    # The networks this studio serves (see storyvid/agents.py).
+    "storyreel.hocon": true
+}

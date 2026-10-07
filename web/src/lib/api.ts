@@ -8,7 +8,7 @@ export type StageStatus =
   | "done"
   | "skipped"
   | "failed";
-export type Engine = "claude" | "openai" | "ltx" | "ffmpeg" | "user";
+export type Engine = "claude" | "openai" | "ltx" | "qwen" | "ffmpeg" | "user";
 export type JobStatus = "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
 export type ShotStatus = "pending" | "rendering" | "checking" | "done" | "needs_review";
 
@@ -72,6 +72,12 @@ export interface Take {
   passed: boolean;
   path: string;
   contact: string | null;
+  /** Dubbed films: who Claude saw talking, and why. */
+  speaker?: string | null;
+  speaker_note?: string | null;
+  /** Dubbed films: the take's picture with the cast voice, and how many words were timed to the lips. */
+  dub?: string | null;
+  dub_words?: string | null;
 }
 
 export interface Shot {
@@ -81,6 +87,9 @@ export interface Shot {
   image: string | null;
   character: string | null;
   line: string | null;
+  /** Who says the line; the character in frame unless it is delivered off camera. */
+  speaker: string | null;
+  delivery: "on" | "off";
   action: string;
   camera: string;
   seconds: number | null;
@@ -140,6 +149,107 @@ export interface ProductionSummary {
   progress: Progress | null;
 }
 
+export interface AgentNetwork {
+  name: string;
+  front_man: string;
+  agents: { name: string; description: string; model: string; tools: string[]; max_seconds: number | null }[];
+  tools: { name: string; description: string; engine: "claude" | "openai" | "local" }[];
+  image_model: string | null;
+}
+
+export interface AgentProgress {
+  phase: string;
+  agent: string | null;
+  tool: string | null;
+  cost: number | null;
+  last_text: string | null;
+  messages: number;
+  started: number;
+  last_event: number;
+  error: string | null;
+}
+
+export interface CastCharacter {
+  id: string;
+  name: string;
+  bible: string;
+  voice_phrase: string;
+  head_query: string;
+}
+
+export interface Beat {
+  action: string;
+  character?: string | null;
+  line?: string | null;
+  delivery?: string | null;
+}
+
+export interface KeyframeReview {
+  same_character: boolean;
+  differences: string[];
+  matches_scene: boolean;
+  prop_ok: boolean;
+  single_ok?: boolean;
+  score: number;
+  verdict: string;
+}
+
+export interface KeyframeCandidate {
+  n: number;
+  frame: string;
+  description: string;
+  identity?: Record<string, number | null>;
+  review: KeyframeReview;
+  seconds: number;
+}
+
+export interface KeyframeChoice {
+  chosen: number | null;
+  candidates: KeyframeCandidate[];
+}
+
+export interface VoiceCandidate {
+  n: number;
+  description: string;
+  text: string;
+  path: string;
+  seconds: number;
+  likeness: Record<string, number>;
+}
+
+export interface VoiceClip {
+  shot: string;
+  scene: string;
+  line: string;
+  heard: string;
+  wer: number;
+  render_s: number;
+  video: string;
+  audio: string;
+}
+
+export interface Preprod {
+  frame: Record<string, unknown> | null;
+  cast: { style: string; characters: CastCharacter[]; props: Record<string, string> } | null;
+  screenplay: {
+    logline: string;
+    scenes: { id: string; setting: string; audio: string; opening: string; beats: Beat[] }[];
+  } | null;
+  keyframes: {
+    sheets: Record<string, string>;
+    props: Record<string, string>;
+    /** Per scene: the establishing frame, and a single (close-up) of every character who speaks in it. */
+    scenes: Record<string, KeyframeChoice & { singles?: Record<string, KeyframeChoice> }>;
+  } | null;
+  /** An LTX voice audition, from before voice casting. */
+  voice: { character: string; clips: VoiceClip[]; consistency: number | null; pairs: number[] } | null;
+  /** Cast voices: per character, every candidate and the chosen one. */
+  voices: Record<string, { chosen: number | null; candidates: VoiceCandidate[] }> | null;
+  summary: string | null;
+  conversation: PipelineEvent[];
+  trace: PipelineEvent[];
+}
+
 export interface Production extends ProductionSummary {
   story: string;
   stages: Stage[];
@@ -150,6 +260,10 @@ export interface Production extends ProductionSummary {
   out: string | null;
   jobs: Job[];
   can_render: boolean;
+  can_plan: boolean;
+  can_audition: boolean;
+  agent_progress: AgentProgress | null;
+  preprod: Preprod | null;
 }
 
 export interface FileEntry {
@@ -222,12 +336,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   settings: () => request<Settings>("/api/settings"),
+  agentNetwork: () => request<AgentNetwork>("/api/agents/network"),
   productions: () => request<ProductionSummary[]>("/api/productions"),
   production: (id: string) => request<Production>(`/api/productions/${id}`),
   createProduction: (form: FormData) =>
     request<Production>("/api/productions", { method: "POST", body: form }),
   deleteProduction: (id: string) => request<{ deleted: string }>(`/api/productions/${id}`, { method: "DELETE" }),
   startRender: (id: string) => request<Job>(`/api/productions/${id}/jobs?kind=render`, { method: "POST" }),
+  startJob: (id: string, kind: "render" | "preprod" | "audition") =>
+    request<Job>(`/api/productions/${id}/jobs?kind=${kind}`, { method: "POST" }),
+  recastVoice: (id: string, character: string, description: string, text: string) =>
+    request<Job>(`/api/productions/${id}/voices/${character}/recast`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description, text }),
+    }),
+  chooseVoice: (id: string, character: string, n: number) =>
+    request<Production>(`/api/productions/${id}/voices/${character}/choose?n=${n}`, { method: "POST" }),
+  approve: (id: string, stage: "plan" | "keyframes" | "voice") =>
+    request<Production>(`/api/productions/${id}/approve?stage=${stage}`, { method: "POST" }),
   jobs: () => request<Job[]>("/api/jobs"),
   job: (id: string) => request<Job>(`/api/jobs/${id}`),
   cancelJob: (id: string) => request<Job>(`/api/jobs/${id}/cancel`, { method: "POST" }),

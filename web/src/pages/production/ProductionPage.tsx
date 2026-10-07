@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Clapperboard, FolderOpen, GitBranch, ListTree, Play, ScrollText, Square, Workflow } from "lucide-react";
+import { Bot, Clapperboard, FolderOpen, GitBranch, ListTree, Play, ScrollText, Square, Workflow } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import { useParams, useSearchParams } from "react-router";
 import { PageHeader } from "../../components/AppShell";
@@ -11,6 +11,7 @@ import { api, thumbUrl } from "../../lib/api";
 import { ago, clock } from "../../lib/format";
 import { productionState } from "../ProductionsPage";
 import { ActivityTab } from "./ActivityTab";
+import { AgentsTab } from "./AgentsTab";
 import { FilmTab } from "./FilmTab";
 import { PipelineTab } from "./PipelineTab";
 import { PlanTab } from "./PlanTab";
@@ -18,6 +19,7 @@ import { ShotsTab } from "./ShotsTab";
 
 const TABS = [
   { key: "pipeline", label: "Pipeline", icon: Workflow },
+  { key: "agents", label: "Agents", icon: Bot },
   { key: "film", label: "Film", icon: Play },
   { key: "shots", label: "Shots", icon: Clapperboard },
   { key: "plan", label: "Plan", icon: ListTree },
@@ -91,16 +93,16 @@ export function ProductionPage() {
             <StatusPill status={state.status} label={state.label} />
             {p.active_job ? (
               <Button variant="danger" icon={<Square className="size-3.5 fill-current" />} loading={cancel.isPending} onClick={() => cancel.mutate()}>
-                {p.active_job.status === "queued" ? "Remove from queue" : "Cancel render"}
+                {p.active_job.status === "queued" ? "Remove from queue" : p.active_job.kind === "render" ? "Cancel render" : "Stop agents"}
               </Button>
-            ) : (
+            ) : p.scenes.length === 0 ? null : (
               <Button
                 variant={p.film ? "secondary" : "primary"}
                 icon={<GitBranch className="size-4" />}
                 disabled={!p.can_render}
                 loading={render.isPending}
                 onClick={() => render.mutate()}
-                title={p.can_render ? "Renders only what changed; finished takes come from the cache" : "Needs an approved plan first"}
+                title={p.can_render ? "Renders only what changed; finished takes come from the cache" : "Approve the plan, keyframes and voice first"}
               >
                 {p.film ? "Re-render" : "Render film"}
               </Button>
@@ -129,6 +131,7 @@ export function ProductionPage() {
               <Icon className={clsx("size-4", tab === key ? "text-amber" : "text-fg-4")} strokeWidth={1.8} />
               {label}
               {key === "activity" && p.active_job && <span className="size-1.5 animate-pulse-soft rounded-full bg-amber" />}
+              {key === "agents" && p.active_job?.kind === "preprod" && <span className="size-1.5 animate-pulse-soft rounded-full bg-amber" />}
               {tab === key && <span className="absolute inset-x-2 -bottom-px h-[2px] rounded-full bg-amber" />}
             </button>
           ))}
@@ -137,6 +140,7 @@ export function ProductionPage() {
 
       <div className="px-8 py-7">
         {tab === "pipeline" && <PipelineTab p={p} onOpenShot={openShot} onRender={() => render.mutate()} />}
+        {tab === "agents" && <AgentsTab p={p} />}
         {tab === "film" && <FilmTab p={p} onOpenShot={openShot} />}
         {tab === "shots" && <ShotsTab p={p} onOpenShot={openShot} />}
         {tab === "plan" && <PlanTab p={p} />}

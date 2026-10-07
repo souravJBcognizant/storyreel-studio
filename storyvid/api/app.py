@@ -4,15 +4,17 @@ Run (dev):  uv run uvicorn storyvid.api.app:app --port 8787 --reload
 The React app (web/) proxies /api and /media here; a production build is served from web/dist.
 """
 
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from ..events import latest_run
-from . import files, store
+from . import agentnet, files, store
 from .config import PROJECT, settings
 from .jobs import JobManager
 
@@ -82,9 +84,47 @@ def delete_production(pid: str):
     return {"deleted": pid}
 
 
+@app.post("/api/productions/{pid}/approve")
+def approve(pid: str, stage: str):
+    store.approve(pid, stage)
+    return store.detail(pid, jobs.all())
+
+
 @app.post("/api/productions/{pid}/jobs")
 def start_job(pid: str, kind: str = "render"):
     return jobs.submit(pid, kind)
+
+
+class Recast(BaseModel):
+    description: str
+    text: str
+
+
+@app.post("/api/productions/{pid}/voices/{cid}/recast")
+def recast_voice(pid: str, cid: str, body: Recast):
+    """Design a new voice for one character from an edited description (a short job: about 20 s)."""
+    if not body.description.strip() or len(body.text.split()) < 8:
+        raise HTTPException(400, "describe the voice, and give a reference text of at least 8 words")
+    folder = store.preprod_dir(pid) / "voices"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"recast_{cid}.json").write_text(json.dumps({"description": body.description.strip(), "text": body.text.strip()}))
+    return jobs.submit(pid, "casting", character=cid)
+
+
+@app.post("/api/productions/{pid}/voices/{cid}/choose")
+def choose_voice(pid: str, cid: str, n: int):
+    from ..casting import choose_voice
+
+    try:
+        choose_voice(pid, cid, n)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return store.detail(pid, jobs.all())
+
+
+@app.get("/api/agents/network")
+def agent_network():
+    return agentnet.network()
 
 
 # ------------------------------------------------------------ jobs
@@ -99,7 +139,10 @@ def list_jobs():
 def get_job(jid: str):
     job = jobs.get(jid)
     events = latest_run(PROJECT / job["out"]) if job["status"] in ("running", "cancelling") else []
-    return {**job, "progress": store.progress(events) if events else job.get("summary")}
+    if not events:
+        return {**job, "progress": job.get("summary")}
+    progress = store.agent_progress(events) if job.get("kind") == "preprod" else store.progress(events)
+    return {**job, "progress": progress}
 
 
 @app.post("/api/jobs/{jid}/cancel")

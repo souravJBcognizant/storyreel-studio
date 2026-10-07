@@ -22,6 +22,8 @@ from . import store
 from .config import PRODUCTIONS, PROJECT
 
 ACTIVE = ("queued", "running", "cancelling")
+KINDS = ("render", "preprod", "audition", "casting")
+FINISHED = {"render": "film_done", "preprod": "run_finished", "audition": "run_finished", "casting": "run_finished"}
 
 
 def _alive(pid: int | None) -> bool:
@@ -73,12 +75,19 @@ class JobManager:
                 raise HTTPException(404, "no such job")
             return dict(self._jobs[jid])
 
-    def submit(self, pid: str, kind: str = "render") -> dict:
+    def submit(self, pid: str, kind: str = "render", character: str | None = None) -> dict:
         plan, out = store.plan_and_out(pid)
-        if kind != "render":
+        if kind not in KINDS:
             raise HTTPException(400, f"unknown job kind {kind!r}")
-        if not plan or not plan.exists():
-            raise HTTPException(409, "this production has no approved plan yet")
+        if kind in ("render", "audition") and (not plan or not plan.exists()):
+            raise HTTPException(409, "this production has no shot plan yet")
+        if kind == "render" and not store.ready_to_render(pid):
+            raise HTTPException(409, "approve the plan, keyframes and voice before rendering")
+        if kind == "casting" and not character:
+            raise HTTPException(400, "a recast needs the character")
+        work = {"render": out, "preprod": store.preprod_dir(pid), "audition": store.preprod_dir(pid) / "voice",
+                "casting": store.preprod_dir(pid) / "voices"}[kind]  # fmt: skip
+        work.mkdir(parents=True, exist_ok=True)
         with self._lock:
             if any(j["production"] == pid and j["status"] in ACTIVE for j in self._jobs.values()):
                 raise HTTPException(409, "a job for this production is already queued or running")
@@ -86,8 +95,9 @@ class JobManager:
             job = {
                 "id": jid, "production": pid, "kind": kind, "status": "queued",
                 "created": time.time(), "started": None, "ended": None, "pid": None, "returncode": None,
-                "error": None, "plan": str(plan.relative_to(PROJECT)), "out": str(out.relative_to(PROJECT)),
-                "log": f"productions/{pid}/jobs/{jid}.log", "summary": None,
+                "error": None, "plan": str(plan.relative_to(PROJECT)) if plan else None,
+                "out": str(work.relative_to(PROJECT)),
+                "log": f"productions/{pid}/jobs/{jid}.log", "summary": None, "character": character,
             }  # fmt: skip
             self._jobs[jid] = job
             self._save(job)
@@ -145,14 +155,23 @@ class JobManager:
                 self._spawn(queued[0])
 
     def _spawn(self, job: dict) -> None:
-        cmd = ["caffeinate", "-dimsu", sys.executable, "-m", "storyvid.pipeline",
-               str(PROJECT / job["plan"]), "--out", str(PROJECT / job["out"])]  # fmt: skip
+        task = {
+            "render": ["-m", "storyvid.pipeline", str(PROJECT / (job["plan"] or "")), "--out", str(PROJECT / job["out"])],
+            "preprod": ["-m", "storyvid.agents", "preprod", job["production"]],
+            "audition": ["-m", "storyvid.audition", job["production"]],
+            "casting": ["-m", "storyvid.casting", "recast", job["production"], job.get("character") or ""],
+        }[job["kind"]]
+        # Keep the system awake for the job (on AC power this also blocks system sleep); the display may sleep.
+        cmd = ["caffeinate", "-ims", sys.executable, *task]
         with open(PROJECT / job["log"], "a") as log:  # the child keeps its own copy of the descriptor
             proc = subprocess.Popen(cmd, cwd=PROJECT, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         self._procs[job["id"]] = proc
         job.update(status="running", started=time.time(), pid=proc.pid)
         self._save(job)
-        store.set_step(job["production"], "render", "running")
+        if job["kind"] == "render":
+            store.set_step(job["production"], "render", "running")
+        elif job["kind"] in ("audition", "casting"):
+            store.set_step(job["production"], "voice", "running")
 
     def _check(self, job: dict) -> None:
         proc = self._procs.get(job["id"])
@@ -165,10 +184,11 @@ class JobManager:
         else:
             code = None
         events = latest_run(PROJECT / job["out"])
-        finished = next((e for e in reversed(events) if e["type"] in ("film_done", "run_failed")), None)
+        done_type = FINISHED[job.get("kind", "render")]
+        finished = next((e for e in reversed(events) if e["type"] in (done_type, "run_failed")), None)
         if job["status"] == "cancelling":
             status = "cancelled"
-        elif finished and finished["type"] == "film_done":
+        elif finished and finished["type"] == done_type and code in (0, None):
             status = "succeeded"
         else:
             status = "failed"
@@ -176,9 +196,15 @@ class JobManager:
                 f"render process exited with code {code}" if code is not None else
                 "render process ended while the studio was not running"
             )  # fmt: skip
-        job.update(status=status, ended=time.time(), returncode=code, summary=store.progress(events))
+        summary = store.progress(events) if job.get("kind", "render") == "render" else store.agent_progress(events)
+        job.update(status=status, ended=time.time(), returncode=code, summary=summary)
         self._procs.pop(job["id"], None)
         self._save(job)
+        if job.get("kind", "render") != "render":
+            # Agents set their own stages as they work; a failure lands on whichever stage was running.
+            if status != "succeeded":
+                store.fail_running_steps(job["production"], "failed" if status == "failed" else "pending")
+            return
         # A cancelled re-render leaves the previous film (and its results) untouched, so the stages
         # keep saying so; a failure is shown on the render stage either way.
         had_film = (PROJECT / job["out"] / "final.mp4").exists()

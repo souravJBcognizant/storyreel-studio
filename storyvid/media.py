@@ -35,11 +35,14 @@ class RenderResult:
 
 
 class Renderer:
-    def __init__(self, project: Path, model_dir: Path, runtime_dir: Path, width: int, height: int, fps: int):
+    def __init__(self, project: Path, model_dir: Path, runtime_dir: Path, width: int, height: int, fps: int,
+                 line_seconds: tuple[float, float] = (3.0, 8.0)):  # fmt: skip
         self.project = project
         self.model_dir = model_dir
         self.runtime_dir = runtime_dir
         self.width, self.height, self.fps = width, height, fps
+        # Shots with a line let LTX's DurationHead fit the clip to the speech, within this range.
+        self.auto_duration = f"{line_seconds[0]:g}:{line_seconds[1]:g}"
         self.runtime_rev = subprocess.run(
             ["git", "-C", str(runtime_dir), "rev-parse", "--short", "HEAD"], capture_output=True, text=True
         ).stdout.strip()
@@ -49,7 +52,7 @@ class Renderer:
             "prompt": prompt,
             "seed": seed,
             "frames": frames,
-            "auto_duration": "3:8" if frames is None else None,
+            "auto_duration": self.auto_duration if frames is None else None,
             "size": [self.width, self.height, self.fps],
             "model": self.model_dir.name,
             "runtime": self.runtime_rev,
@@ -66,7 +69,7 @@ class Renderer:
             "-H", str(self.height), "-W", str(self.width), "--frame-rate", str(self.fps),
             "--seed", str(seed), "--low-ram", "-o", str(out.with_suffix(".partial.mp4")),
         ]  # fmt: skip
-        cmd += ["-f", str(frames)] if frames else ["--auto-duration", "3:8"]
+        cmd += ["-f", str(frames)] if frames else ["--auto-duration", self.auto_duration]
         if image:
             cmd += ["-i", str(image)]
         t0 = time.perf_counter()

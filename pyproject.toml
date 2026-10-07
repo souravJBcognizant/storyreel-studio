@@ -3,9 +3,13 @@ name = "story-video"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "anthropic>=1.11.0",
     "fastapi>=0.142.2",
     "huggingface-hub[hf-xet]>=1.33.0",
+    "langchain-anthropic>=1.7.5",
     "mlx-audio>=0.5.8",
+    "neuro-san>=0.6.63",
+    "openai>=3.25.0",
     "pillow>=12.3.0",
     "python-dotenv>=1.2.4",
     "python-multipart>=0.0.32",

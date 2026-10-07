@@ -4,6 +4,7 @@ import { Check, CircleDot, Clapperboard, Film, ScrollText, Square, TriangleAlert
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button, EmptyState, ScoreChip, StatusPill } from "../../components/ui";
 import { api, type Job, type PipelineEvent, type Production } from "../../lib/api";
+import { Conversation } from "./Preproduction";
 import { ago, duration, stamp } from "../../lib/format";
 
 export function ActivityTab({ p, onCancel }: { p: Production; onCancel: () => void }) {
@@ -47,12 +48,12 @@ export function ActivityTab({ p, onCancel }: { p: Production; onCancel: () => vo
           ))}
         </ul>
       </aside>
-      {job && <JobDetail job={job} onCancel={onCancel} />}
+      {job && <JobDetail job={job} p={p} onCancel={onCancel} />}
     </div>
   );
 }
 
-function JobDetail({ job, onCancel }: { job: Job; onCancel: () => void }) {
+function JobDetail({ job, p, onCancel }: { job: Job; p: Production; onCancel: () => void }) {
   const live = ["queued", "running", "cancelling"].includes(job.status);
   const events = useQuery({ queryKey: ["events", job.id], queryFn: () => api.jobEvents(job.id), refetchInterval: live ? 2500 : false });
   const log = useQuery({ queryKey: ["log", job.id], queryFn: () => api.jobLog(job.id, 400), refetchInterval: live ? 2500 : false });
@@ -68,7 +69,7 @@ function JobDetail({ job, onCancel }: { job: Job; onCancel: () => void }) {
       <section className="card p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="eyebrow">Render job</div>
+            <div className="eyebrow">{job.kind === "preprod" ? "Pre-production job" : job.kind === "audition" ? "Voice audition" : "Render job"}</div>
             <div className="mt-1 flex items-center gap-2.5 font-mono text-[14px] text-fg">
               {job.id} <StatusPill status={job.status} />
             </div>
@@ -90,6 +91,12 @@ function JobDetail({ job, onCancel }: { job: Job; onCancel: () => void }) {
         )}
       </section>
 
+      {job.kind === "preprod" ? (
+        <section className="card p-5">
+          <div className="mb-3 text-[13px] font-medium text-fg">Agent conversation</div>
+          <Conversation p={p} />
+        </section>
+      ) : (
       <section className="card p-5">
         <div className="mb-3 text-[13px] font-medium text-fg">Timeline</div>
         {!items.length && <p className="text-[12.5px] text-fg-3">{live ? "Waiting for the first event…" : "This job ran before event logging existed."}</p>}
@@ -99,6 +106,7 @@ function JobDetail({ job, onCancel }: { job: Job; onCancel: () => void }) {
           ))}
         </ol>
       </section>
+      )}
 
       <section className="card overflow-hidden">
         <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-2.5">

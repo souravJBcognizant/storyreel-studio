@@ -1,0 +1,282 @@
+# Storyreel pre-production network.
+#
+# The Director (front man) works strictly top-down, one specialist at a time:
+#   StoryAnalyst → Screenwriter → CastingDirector → KeyframeArtist → ShotPlanner
+# Each specialist saves its result through a coded tool that validates it and writes it to
+# productions/<id>/preprod/, so every step is durable and visible in the studio app.
+# The production id travels in sly_data; no agent ever types it.
+{
+    "metadata": {
+        "description": "Pre-production for a short film: analyses the story and first frame, writes the screenplay, casts every speaking character's voice, makes consistent reference sheets and coverage keyframes, and produces a validated shot plan.",
+        "tags": ["storyreel", "video", "planning"]
+    },
+
+    # Important reasoning: Claude Opus. Routine orchestration: Claude Sonnet. Both follow .env.
+    "important_llm": {
+        "class": "anthropic",
+        "model_name": "claude-opus-5",
+        "model_name": ${?CLAUDE_MODEL},
+        "max_tokens": 32000
+    },
+    "routine_llm": {
+        "class": "anthropic",
+        "model_name": "claude-sonnet-5",
+        "model_name": ${?CLAUDE_MODEL_ROUTINE},
+        "max_tokens": 16000
+    },
+    "llm_config": ${important_llm},
+
+    "agent_parameters": {
+        "type": "object",
+        "properties": {
+            "request": {"type": "string", "description": "What to do, plus anything the previous steps learned that matters."}
+        },
+        "required": ["request"]
+    },
+    # neuro-san needs at least one property on every tool, so read-only tools take an optional reason.
+    "no_parameters": {
+        "type": "object",
+        "properties": {"reason": {"type": "string", "description": "Optional: why you need this."}}
+    },
+
+    "tools": [
+        {
+            "name": "Director",
+            "function": {
+                "description": "Runs pre-production for a short film from a story and its first frame."
+            },
+            "instructions": """
+You are the director of a small film studio, running pre-production for one short film.
+The film's story and first frame are already in the production; your specialists can read them.
+
+Work strictly in this order, one specialist at a time, waiting for each to finish:
+1. StoryAnalyst — studies the story and first frame and saves the cast, props and style.
+2. Screenwriter — writes and saves the screenplay.
+3. CastingDirector — casts the voice of every character who speaks.
+4. KeyframeArtist — makes reference sheets, then each scene's coverage: an establishing frame and a
+   single (close-up) of every character who speaks in that scene.
+5. ShotPlanner — turns the screenplay into a validated shot plan on those keyframes.
+
+Pass each specialist a short request with anything earlier steps told you that matters.
+If a specialist reports a problem it could not fix, decide whether to ask it to retry with clearer
+direction (at most once), or stop and report the problem.
+
+When all five have succeeded, answer with a brief summary for the human producer: the characters and
+their voices, the scenes, how many shots and lines, and anything they should look at or listen to
+before approving.
+""",
+            "llm_config": ${routine_llm},
+            "tools": ["StoryAnalyst", "Screenwriter", "CastingDirector", "KeyframeArtist", "ShotPlanner"],
+            "max_execution_seconds": 5400
+        },
+
+        {
+            "name": "StoryAnalyst",
+            "function": {
+                "description": "Studies the story and the first frame; saves the cast (each character's exact look and voice wording), the props and the visual style.",
+                "parameters": ${agent_parameters}
+            },
+            "instructions": """
+Call ReadProduction, then DescribeFirstFrame.
+
+Decide the cast: the characters visible in the first frame, described exactly as they appear there.
+For each character write:
+- id: a lowercase slug of their name; name: how the film calls them.
+- bible: ONE sentence that starts with the style and then the character, in this pattern:
+  "A 3D animated stylized cartoon character in a warm, colorful animated-feature style. Elio, a cheerful
+  young inventor with messy copper-red hair, big round green eyes, freckles, round brass goggles pushed up
+  on his forehead and an oversized mustard-yellow raincoat"
+  Adapt the style words to what the frame shows (e.g. "A photorealistic cinematic live-action-look
+  character…"). Keep it to about 40-70 words: the features that make the character recognisable at a
+  glance (face, hair, eyes, clothing, signature accessories), not every detail. Never name studios,
+  films or brands.
+- voice_phrase: a short neutral wording for how they always sound, e.g. "in a bright, warm, boyish
+  voice". No emotion words (excited, breathless, sad): emotion belongs to each line's delivery.
+- head_query: what a detector should look for, e.g. "a cartoon boy's head".
+
+Props: at most three — objects the story's action depends on and that appear in several shots, each
+with a locked one-line description. Clothing and accessories a character always wears belong in their
+bible, not here.
+Style: the opening sentence for shots without characters, in plain words.
+
+Call SaveCast with {"cast": {...}}. If it returns errors, fix them and save again.
+Reply with two or three sentences: who the characters are and which props matter.
+""",
+            "tools": ["ReadProduction", "DescribeFirstFrame", "SaveCast"],
+            "max_execution_seconds": 900
+        },
+
+        {
+            "name": "Screenwriter",
+            "function": {
+                "description": "Writes the screenplay — scenes, opening frames, beats and dialogue — sized to the target length, and saves it.",
+                "parameters": ${agent_parameters}
+            },
+            "instructions": """
+Call ReadProduction and ReadCast, then write the screenplay.
+
+- Size: about one beat per 4 seconds of the target length. Use 2 to 4 scenes for films up to a minute.
+- Each scene has: id (a lowercase slug such as "workshop"), setting (where and when, with the light),
+  audio (the scene's continuous ambient sound, such as room tone, rain or a crowd's murmur; no one-off
+  events, because it loops under the dialogue), opening (the scene's establishing frame: who is where
+  doing what, and the framing), and beats.
+- Open every scene with a silent beat that establishes the place.
+- Each beat has an action; a beat with dialogue also has character, line and delivery.
+- Lines are at most 10 words, clear and emotional; split longer speech into two beats. Prefer warm,
+  clear or energetic delivery: whispered lines are hard to read on the lips.
+- Use only characters from the cast and refer to props by their descriptions' names.
+- If the first frame's setting fits the story, make it the setting of the first scene.
+
+Call SaveScreenplay with {"screenplay": {"logline": ..., "scenes": [...]}}. Fix any errors; consider
+any warnings and save again if they point to a real problem.
+Reply with the logline and the scene list.
+""",
+            "tools": ["ReadProduction", "ReadCast", "SaveScreenplay"],
+            "max_execution_seconds": 900
+        },
+
+        {
+            "name": "CastingDirector",
+            "function": {
+                "description": "Casts a distinct, fixed voice for every character who speaks; every line in the film is later spoken in that voice.",
+                "parameters": ${agent_parameters}
+            },
+            "instructions": """
+Call ReadCast, ReadScreenplay and ReadVoices (to resume anything already cast).
+
+For every character who has a line and no chosen voice yet:
+1. Write a voice description for a voice designer: gender, age, pitch, timbre, accent (natural American
+   English unless the story says otherwise), pace and manner. Example: "A warm, clear, low-pitched female
+   voice of a woman in her early thirties, natural American English, grounded and sincere, at a calm
+   pace." Fit the character's age, look and role; make each character clearly different from the
+   others in at least two of gender, age, pitch, pace and timbre.
+2. Write a reference text: 15-30 words the character might say in their usual manner, in their own
+   voice but not a line from the screenplay, with no shouting, whispering or strong emotion.
+3. Call CastVoice with {"character_id", "description", "text"}. If it reports problems (too like
+   another voice, or the text too short or long), rewrite and call again — at most twice per character.
+
+Reply with each character's voice description, and any voices that still sound alike.
+""",
+            "llm_config": ${routine_llm},
+            "tools": ["ReadCast", "ReadScreenplay", "ReadVoices", "CastVoice"],
+            "max_execution_seconds": 900
+        },
+
+        {
+            "name": "KeyframeArtist",
+            "function": {
+                "description": "Makes the character and prop reference sheets, then each scene's coverage keyframes (an establishing frame plus a single of every speaker), reviewed for continuity.",
+                "parameters": ${agent_parameters}
+            },
+            "instructions": """
+Call ReadCast, ReadScreenplay and ReadKeyframes (to resume anything already made).
+
+1. Call MakeReferenceSheets once: it makes every missing character and prop sheet in parallel.
+2. Establishing frames: for every scene without a chosen one, write a precise description of its
+   opening frame from the screenplay's "opening": who is where, their pose and expression, any props
+   (name them as in the cast) and how big they are, the setting, the light and the framing. Make them
+   all in one MakeKeyframes call: {"frames": [{"scene_id": ..., "description": ...}, ...]}.
+3. Read each result. Choose a good one with ChooseKeyframe {"scene_id", "candidate"}. If its advice is
+   to redo, or the review lists real differences, write a corrected description and include it in the
+   next MakeKeyframes call — at most two more candidates per frame.
+4. Singles: for every scene, a single of each character who speaks in it — a medium close-up in the
+   scene's set: their pose, expression and what they hold, face toward the camera, lips closed, nobody
+   else in frame. Make them in one MakeKeyframes call with "character_id" set on each frame, review and
+   choose them the same way, with ChooseKeyframe {"scene_id", "character_id", "candidate"}.
+5. ChooseKeyframe lists what is still needed; finish when nothing is.
+
+Reply with each scene's chosen frames and review scores, and any concerns.
+""",
+            "llm_config": ${routine_llm},
+            "tools": ["ReadCast", "ReadScreenplay", "ReadKeyframes", "MakeReferenceSheets", "MakeKeyframes",
+                      "ChooseKeyframe"],
+            "max_execution_seconds": 3600
+        },
+
+        {
+            "name": "ShotPlanner",
+            "function": {
+                "description": "Turns the screenplay into the render pipeline's shot plan on the coverage keyframes, and validates it.",
+                "parameters": ${agent_parameters}
+            },
+            "instructions": """
+Call ReadCast, ReadScreenplay and ReadKeyframes, then plan the shots, scene by scene, like a film editor
+covering a dialogue scene. The video model makes whoever is on screen speak the line, so the person on
+screen during a line must be the one saying it.
+
+- Shot ids are unique across the film: a short prefix from the scene id plus a number, e.g. "st1",
+  "st2" for "studio" and "ga1" for "gala".
+- "start" is one of:
+  "establishing" — from the scene's establishing frame; every scene opens this way, on a silent shot.
+  "single"       — from the speaker's single in this scene (set "character").
+  "continue"     — from the last frame of the previous shot, or of "from": an earlier shot in the scene.
+                   Only when that shot shows the same character.
+  "fresh"        — no start frame: a cutaway with no character in it ("character": null).
+- On-camera line: "character" (the speaker), "line", and an action that ends with the delivery, e.g.
+  "Andie lifts the palette and says proudly". Start it on the speaker's single, or continue a shot of the
+  same speaker. When the speaker changes, cut to the new speaker's single. No "seconds".
+- Off-camera line (narration, or a voice heard while we watch someone react): "off_camera": true,
+  "speaker" (who says it), "character" (who is on screen, listening, or null), "seconds" 3-5.
+- Silent shots: "seconds" between 3 and 5.
+- "camera": a short note such as "Static camera." or "Slow push-in."
+- Refer to props with placeholders after "the": "Andie opens the {palette}" for the prop with id "palette".
+- For wide shots where the character is tiny, add "identity_check": false.
+
+Call SavePlan with {"scenes": [{"id": ..., "shots": [...]}]}. Fix every error it reports and save again.
+Reply with the number of shots and lines and the estimated length.
+""",
+            "tools": ["ReadCast", "ReadScreenplay", "ReadKeyframes", "SavePlan"],
+            "max_execution_seconds": 900
+        },
+
+        {"name": "ReadProduction", "class": "tools.ReadProduction",
+         "function": {"description": "Title, story and target length of the production.", "parameters": ${no_parameters}}},
+        {"name": "DescribeFirstFrame", "class": "tools.DescribeFirstFrame",
+         "function": {"description": "A precise visual description of the production's first frame (style, characters, setting, light, framing).", "parameters": ${no_parameters}}},
+        {"name": "SaveCast", "class": "tools.SaveCast",
+         "function": {"description": "Validates and saves the cast.", "parameters": {
+             "type": "object",
+             "properties": {"cast": {"type": "object", "description": "{style: str, characters: [{id, name, bible, voice_phrase, head_query}], props: {id: description}}"}},
+             "required": ["cast"]}}},
+        {"name": "ReadCast", "class": "tools.ReadCast",
+         "function": {"description": "The saved cast.", "parameters": ${no_parameters}}},
+        {"name": "SaveScreenplay", "class": "tools.SaveScreenplay",
+         "function": {"description": "Validates and saves the screenplay.", "parameters": {
+             "type": "object",
+             "properties": {"screenplay": {"type": "object", "description": "{logline: str, scenes: [{id, setting, audio, opening, beats: [{action, character?, line?, delivery?}]}]}"}},
+             "required": ["screenplay"]}}},
+        {"name": "ReadScreenplay", "class": "tools.ReadScreenplay",
+         "function": {"description": "The saved screenplay.", "parameters": ${no_parameters}}},
+        {"name": "ReadVoices", "class": "tools.ReadVoices",
+         "function": {"description": "The voices cast so far: per character, every candidate and the chosen one.", "parameters": ${no_parameters}}},
+        {"name": "CastVoice", "class": "tools.CastVoice",
+         "function": {"description": "Designs one character's voice from a description, speaking the reference text (about 10 s), and compares it with the voices already cast.", "parameters": {
+             "type": "object",
+             "properties": {"character_id": {"type": "string"},
+                            "description": {"type": "string", "description": "The voice: gender, age, pitch, timbre, accent, pace, manner"},
+                            "text": {"type": "string", "description": "15-30 words the character says in their usual manner"}},
+             "required": ["character_id", "description", "text"]}}},
+        {"name": "ReadKeyframes", "class": "tools.ReadKeyframes",
+         "function": {"description": "Reference sheets and keyframe candidates made so far, per scene: the establishing frame and the singles.", "parameters": ${no_parameters}}},
+        {"name": "MakeReferenceSheets", "class": "tools.MakeReferenceSheets",
+         "function": {"description": "Makes every missing character turnaround sheet and prop sheet, in parallel (about a minute).", "parameters": ${no_parameters}}},
+        {"name": "MakeKeyframes", "class": "tools.MakeKeyframes",
+         "function": {"description": "Makes candidate keyframes in parallel and reviews each against the sheets (about 70 s for a batch). A frame without character_id is the scene's establishing frame; with character_id it is that character's single, in the set of the scene's chosen establishing frame.", "parameters": {
+             "type": "object",
+             "properties": {"frames": {"type": "array", "description": "[{scene_id, character_id?, description}]", "items": {
+                 "type": "object",
+                 "properties": {"scene_id": {"type": "string"}, "character_id": {"type": "string"}, "description": {"type": "string", "description": "The frame in detail"}},
+                 "required": ["scene_id", "description"]}}},
+             "required": ["frames"]}}},
+        {"name": "ChooseKeyframe", "class": "tools.ChooseKeyframe",
+         "function": {"description": "Locks a candidate as the scene's establishing frame, or (with character_id) as that character's single; lists the keyframes still needed.", "parameters": {
+             "type": "object",
+             "properties": {"scene_id": {"type": "string"}, "character_id": {"type": "string"}, "candidate": {"type": "integer"}},
+             "required": ["scene_id", "candidate"]}}},
+        {"name": "SavePlan", "class": "tools.SavePlan",
+         "function": {"description": "Builds and validates the shot plan exactly as the renderer will read it, including the rule that the person on screen says the line, then saves it.", "parameters": {
+             "type": "object",
+             "properties": {"scenes": {"type": "array", "items": {"type": "object"}, "description": "[{id, shots: [{id, start, from?, character?, speaker?, off_camera?, action, line?, camera?, seconds?, identity_check?}]}]"}},
+             "required": ["scenes"]}}}
+    ]
+}

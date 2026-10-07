@@ -107,6 +107,7 @@ export const ENGINE: Record<Engine, { label: string; color: string; text: string
   claude: { label: "Claude", color: "var(--color-engine-claude)", text: "text-engine-claude" },
   openai: { label: "OpenAI", color: "var(--color-engine-openai)", text: "text-engine-openai" },
   ltx: { label: "LTX · local", color: "var(--color-engine-ltx)", text: "text-engine-ltx" },
+  qwen: { label: "Qwen · local", color: "var(--color-engine-qwen)", text: "text-engine-qwen" },
   ffmpeg: { label: "ffmpeg", color: "var(--color-engine-ffmpeg)", text: "text-engine-ffmpeg" },
   user: { label: "You", color: "var(--color-engine-user)", text: "text-engine-user" },
 };
@@ -125,6 +126,8 @@ export function EngineTag({ engine, model, className }: { engine: Engine; model?
 // ---------------------------------------------------------------- QA scores
 
 // Gates mirror storyvid/pipeline.py: words WER ≤ 0.2, voice ≥ 0.78, continuity ≥ 0.72. Identity only ranks takes.
+// In dubbed films voice and continuity are information only (`info`): the voice is the cast voice by construction,
+// and Claude's speaker check judges who is on screen.
 export type Metric = "words" | "voice" | "identity" | "continuity";
 export function metricTone(metric: Metric, value: number): "ok" | "bad" | "fair" {
   if (metric === "words") return value <= 0.2 ? "ok" : "bad";
@@ -135,9 +138,9 @@ export function metricTone(metric: Metric, value: number): "ok" | "bad" | "fair"
 
 const METRIC_LABEL: Record<Metric, string> = { words: "Words", voice: "Voice", identity: "Look", continuity: "Flow" };
 
-export function ScoreChip({ metric, value, compact }: { metric: Metric; value: number | null; compact?: boolean }) {
+export function ScoreChip({ metric, value, compact, info }: { metric: Metric; value: number | null; compact?: boolean; info?: boolean }) {
   if (value == null) return null;
-  const tone = metricTone(metric, value);
+  const tone = info ? "info" : metricTone(metric, value);
   const shown = metric === "words" ? (value === 0 ? "✓" : `${Math.round(value * 100)}%`) : value.toFixed(2);
   return (
     <span
@@ -147,6 +150,7 @@ export function ScoreChip({ metric, value, compact }: { metric: Metric; value: n
         tone === "ok" && "border-ok/20 bg-ok/[0.07] text-ok",
         tone === "fair" && "border-warn/20 bg-warn/[0.07] text-warn",
         tone === "bad" && "border-bad/25 bg-bad/[0.08] text-bad",
+        tone === "info" && "border-white/[0.08] bg-white/[0.03] text-fg-2",
       )}
     >
       {!compact && <span className="font-sans text-[10.5px] text-fg-3">{METRIC_LABEL[metric]}</span>}
