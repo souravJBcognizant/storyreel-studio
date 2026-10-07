@@ -2,6 +2,7 @@
 # Downloads the LTX 2.5 q8 MLX pack as soon as a Hugging Face login with license access exists.
 # The repo is gated: accept the license on its HF page, then `hf auth login` once.
 cd "$(dirname "$0")/.."
+mkdir -p models
 LOG=models/download-ltx.log
 : > "$LOG"
 
