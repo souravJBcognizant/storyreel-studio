@@ -26,6 +26,7 @@ from .config import (
     PRODUCTIONS,
     PROJECT,
     VISION_ENGINE,
+    VISION_MODEL,
 )
 from .files import media_duration, to_virtual
 
@@ -186,7 +187,9 @@ def ensure_imports() -> None:
 
 def create(title: str, story: str, frame_name: str, frame_bytes: bytes, target_seconds: int,
            guide_frames: list[tuple[str, bytes]] | None = None,
-           final_frame: tuple[str, bytes] | None = None) -> dict:  # fmt: skip
+           final_frame: tuple[str, bytes] | None = None,
+           story_mode: str = "manual", story_prompt: str | None = None,
+           story_uses_images: bool | None = None, story_note: str | None = None) -> dict:  # fmt: skip
     pid = slugify(title)
     inputs = PRODUCTIONS / pid / "inputs"
     inputs.mkdir(parents=True, exist_ok=True)
@@ -214,6 +217,10 @@ def create(title: str, story: str, frame_name: str, frame_bytes: bytes, target_s
         "updated": now,
         "source": "Uploaded",
         "story": story,
+        "story_mode": story_mode,
+        "story_prompt": story_prompt,
+        "story_uses_images": story_uses_images,
+        "story_note": story_note,
         "first_frame": f"productions/{pid}/inputs/{opening_path.name}",
         "reference_images": references,
         "plan": None,
@@ -567,10 +574,23 @@ def detail(pid: str, jobs: list[dict]) -> dict:
         steps["render"] = "running" if active["status"] != "queued" else "queued"
     if editing:
         steps["assemble"] = "running" if active["status"] != "queued" else "queued"
+    stages = [{**stage, "status": steps.get(stage["key"], "pending")} for stage in STAGES]
+    if prod.get("story_mode") == "ai":
+        story_stage = next(stage for stage in stages if stage["key"] == "story")
+        story_stage.update({
+            "owner": "Storyteller",
+            "engine": VISION_ENGINE if prod.get("story_uses_images") else LLM_ENGINE,
+            "model": VISION_MODEL if prod.get("story_uses_images") else LLM_MODEL,
+            "detail": prod.get("story_note") or "Invented the title and story from the creative direction",
+        })
     return {
         **summary(pid, jobs),
         "story": prod["story"],
-        "stages": [{**s, "status": steps.get(s["key"], "pending")} for s in STAGES],
+        "story_mode": prod.get("story_mode", "manual"),
+        "story_prompt": prod.get("story_prompt"),
+        "story_uses_images": prod.get("story_uses_images"),
+        "story_note": prod.get("story_note"),
+        "stages": stages,
         "characters": characters,
         "props": plan.props if plan else {},
         "scenes": scenes,

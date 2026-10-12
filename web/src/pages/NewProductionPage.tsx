@@ -25,15 +25,19 @@ export function NewProductionPage() {
   const [guides, setGuides] = useState<PickedFrame[]>([]);
   const [ending, setEnding] = useState<PickedFrame | null>(null);
   const previewUrls = useRef(new Set<string>());
+  const [storyMode, setStoryMode] = useState<"manual" | "ai">("manual");
   const [title, setTitle] = useState("");
   const [story, setStory] = useState("");
+  const [storyPrompt, setStoryPrompt] = useState("Generate an interesting story.");
   const [seconds, setSeconds] = useState(60);
   const [dragging, setDragging] = useState(false);
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   // Nested optional checks keep this page usable while Vite and the API reload at different times.
   const planningEngine: Engine = settings?.providers.language?.provider === "ollama" ? "ollama" : "claude";
+  const visionEngine: Engine = settings?.providers.vision?.provider === "ollama" ? "ollama" : "claude";
   const imageEngine: Engine = settings?.providers.images?.provider === "local" ? "local" : "openai";
-  const next: { label: string; engine: Engine; checkpoint?: boolean }[] = settings?.mode === "local"
+  const modelCanInspect = !!settings?.providers.vision?.configured;
+  const planningSteps: { label: string; engine: Engine; checkpoint?: boolean }[] = settings?.mode === "local"
     ? [
         { label: "Story analysis from text", engine: planningEngine },
         { label: "Screenplay & text-driven shot plan", engine: planningEngine, checkpoint: true },
@@ -48,6 +52,9 @@ export function NewProductionPage() {
         { label: "Coverage keyframes", engine: imageEngine, checkpoint: true },
         { label: "Render & QA, then the edit", engine: "ltx" },
       ];
+  const next = storyMode === "ai"
+    ? [{ label: modelCanInspect ? "Invent title & story from the references" : "Invent title & story from your direction", engine: modelCanInspect ? visionEngine : planningEngine }, ...planningSteps]
+    : planningSteps;
 
   useEffect(() => () => previewUrls.current.forEach((url) => URL.revokeObjectURL(url)), []);
 
@@ -93,8 +100,10 @@ export function NewProductionPage() {
   const create = useMutation({
     mutationFn: () => {
       const form = new FormData();
-      form.set("title", title.trim());
-      form.set("story", story.trim());
+      form.set("story_mode", storyMode);
+      form.set("title", storyMode === "manual" ? title.trim() : "");
+      form.set("story", storyMode === "manual" ? story.trim() : "");
+      form.set("story_prompt", storyMode === "ai" ? storyPrompt.trim() : "");
       form.set("target_seconds", String(seconds));
       form.set("first_frame", file!);
       guides.forEach(({ file: guide }) => form.append("guide_frames", guide));
@@ -116,14 +125,16 @@ export function NewProductionPage() {
   const words = story.trim() ? story.trim().split(/\s+/).length : 0;
   const ratio = size ? size.w / size.h : null;
   const ratioOk = ratio == null || Math.abs(ratio - 1.5) < 0.12;
-  const ready = !!file && title.trim().length > 1 && story.trim().length >= 20;
+  const ready = !!file && (storyMode === "ai" ? storyPrompt.trim().length > 2 : title.trim().length > 1 && story.trim().length >= 20);
 
   return (
     <>
       <PageHeader
         eyebrow="New production"
-        title="Start with frames and a story"
-        subtitle="Choose the opening frame, then optionally add guide frames and a final frame to shape how the production develops."
+        title={storyMode === "ai" ? "Give the AI your pictures" : "Start with frames and a story"}
+        subtitle={storyMode === "ai"
+          ? "Upload the visual anchors and give one simple direction. The AI will choose the title, characters and complete story."
+          : "Choose the opening frame, then optionally add guide frames and a final frame to shape how the production develops."}
       />
       <div className="grid gap-6 px-8 py-7 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
         <section>
@@ -220,28 +231,75 @@ export function NewProductionPage() {
 
         <section className="flex flex-col gap-5">
           <div className="card p-5">
-            <label className="block">
-              <span className="eyebrow">Title</span>
-              <input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Elio's First Flight"
-                className="mt-2 w-full rounded-lg border border-white/[0.08] bg-ink-900 px-3.5 py-2.5 font-display text-[18px] text-fg placeholder:text-fg-4 focus:border-amber/50 focus:outline-none"
-              />
-            </label>
-            <label className="mt-5 block">
-              <span className="flex items-baseline justify-between">
-                <span className="eyebrow">Story</span>
-                <span className="font-mono text-[10.5px] text-fg-4">{words} words</span>
-              </span>
-              <textarea
-                value={story}
-                onChange={(e) => setStory(e.target.value)}
-                rows={9}
-                placeholder="Late at night in his cluttered workshop, Elio finishes a small homemade flying machine. At golden hour he takes it to the beach…"
-                className="mt-2 w-full resize-y rounded-lg border border-white/[0.08] bg-ink-900 px-3.5 py-3 text-[13.5px] leading-relaxed text-fg placeholder:text-fg-4 focus:border-amber/50 focus:outline-none"
-              />
-            </label>
+            <div>
+              <span className="eyebrow">Who creates the story?</span>
+              <div role="group" aria-label="Story creation mode" className="mt-2 grid grid-cols-2 rounded-lg border border-white/[0.08] bg-ink-900 p-1">
+                <button
+                  type="button"
+                  aria-pressed={storyMode === "manual"}
+                  onClick={() => setStoryMode("manual")}
+                  className={clsx("rounded-md px-3 py-2 text-[12.5px] transition-colors", storyMode === "manual" ? "bg-ink-700 font-medium text-fg shadow" : "text-fg-3 hover:text-fg")}
+                >
+                  I’ll write it
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={storyMode === "ai"}
+                  onClick={() => setStoryMode("ai")}
+                  className={clsx("rounded-md px-3 py-2 text-[12.5px] transition-colors", storyMode === "ai" ? "bg-amber/15 font-medium text-amber shadow" : "text-fg-3 hover:text-fg")}
+                >
+                  Invent from images
+                </button>
+              </div>
+            </div>
+
+            {storyMode === "manual" ? (
+              <>
+                <label className="mt-5 block">
+                  <span className="eyebrow">Title</span>
+                  <input
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="Elio's First Flight"
+                    className="mt-2 w-full rounded-lg border border-white/[0.08] bg-ink-900 px-3.5 py-2.5 font-display text-[18px] text-fg placeholder:text-fg-4 focus:border-amber/50 focus:outline-none"
+                  />
+                </label>
+                <label className="mt-5 block">
+                  <span className="flex items-baseline justify-between">
+                    <span className="eyebrow">Story</span>
+                    <span className="font-mono text-[10.5px] text-fg-4">{words} words</span>
+                  </span>
+                  <textarea
+                    value={story}
+                    onChange={(e) => setStory(e.target.value)}
+                    rows={9}
+                    placeholder="Late at night in his cluttered workshop, Elio finishes a small homemade flying machine. At golden hour he takes it to the beach…"
+                    className="mt-2 w-full resize-y rounded-lg border border-white/[0.08] bg-ink-900 px-3.5 py-3 text-[13.5px] leading-relaxed text-fg placeholder:text-fg-4 focus:border-amber/50 focus:outline-none"
+                  />
+                </label>
+              </>
+            ) : (
+              <div className="mt-5">
+                <label className="block">
+                  <span className="flex items-baseline justify-between">
+                    <span className="eyebrow">Creative direction</span>
+                    <span className="font-mono text-[10.5px] text-fg-4">{storyPrompt.length}/1200</span>
+                  </span>
+                  <textarea
+                    value={storyPrompt}
+                    onChange={(e) => setStoryPrompt(e.target.value.slice(0, 1200))}
+                    rows={4}
+                    placeholder="Generate an interesting story."
+                    className="mt-2 w-full resize-y rounded-lg border border-amber/20 bg-amber/[0.025] px-3.5 py-3 text-[13.5px] leading-relaxed text-fg placeholder:text-fg-4 focus:border-amber/60 focus:outline-none"
+                  />
+                </label>
+                <div className={clsx("mt-3 rounded-lg border px-3.5 py-3 text-[11.5px] leading-relaxed", modelCanInspect ? "border-ok/20 bg-ok/[0.04] text-fg-2" : "border-warn/25 bg-warn/[0.05] text-fg-3")}>
+                  {modelCanInspect
+                    ? "The vision model will read the references in order and invent a title and story that connects them. You can review the result before planning."
+                    : "The current model is text-only, so it will invent the title and story from this direction without seeing the pictures. The pictures will still anchor the video in their uploaded order."}
+                </div>
+              </div>
+            )}
             <div className="mt-5">
               <div className="eyebrow">Target length</div>
               <div className="mt-2 inline-flex rounded-lg border border-white/[0.08] bg-ink-900 p-1">
@@ -289,7 +347,7 @@ export function NewProductionPage() {
             onClick={() => create.mutate()}
             className="self-end"
           >
-            Create production <ArrowRight className="size-4" />
+            {storyMode === "ai" ? (create.isPending ? "Inventing story…" : "Invent story & create") : "Create production"} <ArrowRight className="size-4" />
           </Button>
         </section>
       </div>

@@ -265,6 +265,10 @@ export interface Preprod {
 
 export interface Production extends ProductionSummary {
   story: string;
+  story_mode: "manual" | "ai";
+  story_prompt: string | null;
+  story_uses_images: boolean | null;
+  story_note: string | null;
   stages: Stage[];
   characters: Character[];
   props: Record<string, string>;

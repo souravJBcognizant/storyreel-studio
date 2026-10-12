@@ -118,7 +118,15 @@ function StageContext({ p, stage, onRender }: { p: Production; stage: Stage; onR
               </div>
             ))}
           </div>
-          <p className="line-clamp-5 text-[13px] leading-relaxed text-fg-2">{p.story}</p>
+          <div className="min-w-0">
+            {p.story_mode === "ai" && (
+              <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[10.5px]">
+                <span className="rounded-full border border-amber/25 bg-amber/[0.07] px-2 py-0.5 font-medium text-amber">AI-invented story</span>
+                <span className="text-fg-4">{p.story_note}</span>
+              </div>
+            )}
+            <p className="line-clamp-5 text-[13px] leading-relaxed text-fg-2">{p.story}</p>
+          </div>
         </div>
       );
     case "plan":

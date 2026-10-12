@@ -6,7 +6,7 @@ Make a short film from **a story and your pictures**, on your Mac.
 
 ## What it does
 
-1. You give it an **opening frame** and a **short story**. You can also add up to six ordered guide frames and a final frame.
+1. You give it an **opening frame** and either write a **short story** or ask the AI to invent one. You can also add up to six ordered guide frames and a final frame.
 2. AI agents **plan the film**: the characters, the screenplay, a voice for every character, a picture for every shot, and the shot list.
 3. You **check and approve** the plan, the pictures and the voices.
 4. Your Mac **makes the video** with LTX-2.5, checks every shot, redoes the bad ones, and edits the film.
@@ -127,9 +127,16 @@ The first film downloads a few smaller models by itself (speech and voice, about
 
 ## Make your first film
 
-**1. Start a new production.** Add an opening picture, a title and a story, and pick a length. Optionally add
-guide pictures in story order and a final picture. The renderer distributes the guides across the shot
-timeline and pins the final picture to the end of the last shot.
+**1. Start a new production.** Add an opening picture and pick a length. Optionally add guide pictures in
+story order and a final picture. Then choose either **I’ll write it** to provide the title and story yourself,
+or **Invent from images** and leave a simple direction such as “Generate an interesting story.” In that mode,
+the AI chooses the title, characters, plot and ending, using the pictures as chronological anchors when a
+vision-capable model is configured. The renderer distributes the guides across the shot timeline and pins the
+final picture to the end of the last shot.
+
+In local mode, a multimodal model set in `OLLAMA_VISION_MODEL` can invent the story from the actual image
+contents. With a text-only model such as the 4B Qwen setup, the studio says that it cannot inspect the pictures,
+invents the story from the direction alone, and still applies every uploaded picture directly to the timeline.
 
 ![New production](docs/images/new-production.jpg)
 

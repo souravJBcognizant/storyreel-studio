@@ -4,6 +4,7 @@ Run (dev):  uv run uvicorn storyvid.api.app:app --port 8787 --reload
 The React app (web/) proxies /api and /media here; a production build is served from web/dist.
 """
 
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ..events import latest_run
+from ..story_draft import generate_story
 from . import agentnet, files, store
 from .config import PROJECT, settings
 from .jobs import JobManager
@@ -57,15 +59,15 @@ def list_productions():
 
 @app.post("/api/productions")
 async def create_production(
-    title: str = Form(...),
-    story: str = Form(...),
+    title: str = Form(""),
+    story: str = Form(""),
+    story_mode: Literal["manual", "ai"] = Form("manual"),
+    story_prompt: str = Form(""),
     target_seconds: int = Form(60),
     first_frame: UploadFile = File(...),
     guide_frames: list[UploadFile] = File(default=[]),
     final_frame: UploadFile | None = File(default=None),
 ):
-    if not title.strip() or len(story.strip()) < 20:
-        raise HTTPException(422, "a title and a story of at least a couple of sentences are needed")
     if len(guide_frames) > MAX_GUIDE_FRAMES:
         raise HTTPException(422, f"add at most {MAX_GUIDE_FRAMES} guide frames")
 
@@ -80,7 +82,27 @@ async def create_production(
     opening = await read_image(first_frame, "opening frame")
     guides = [await read_image(upload, f"guide frame {i}") for i, upload in enumerate(guide_frames, 1)]
     ending = await read_image(final_frame, "final frame") if final_frame else None
-    prod = store.create(title, story, *opening, target_seconds, guide_frames=guides, final_frame=ending)
+    story_uses_images = story_note = None
+    if story_mode == "ai":
+        if len(story_prompt.strip()) > 1200:
+            raise HTTPException(422, "keep the creative direction under 1,200 characters")
+        references = [("opening", opening[0], opening[1])]
+        references += [("guide", name, data) for name, data in guides]
+        if ending:
+            references.append(("ending", ending[0], ending[1]))
+        try:
+            generated = await asyncio.to_thread(generate_story, story_prompt, target_seconds, references)
+        except Exception as exc:
+            raise HTTPException(502, f"the AI could not invent the story: {exc}") from exc
+        title, story = generated.title, generated.story
+        story_uses_images, story_note = generated.used_images, generated.note
+    elif not title.strip() or len(story.strip()) < 20:
+        raise HTTPException(422, "a title and a story of at least a couple of sentences are needed")
+    prod = store.create(
+        title, story, *opening, target_seconds, guide_frames=guides, final_frame=ending,
+        story_mode=story_mode, story_prompt=story_prompt.strip() or None,
+        story_uses_images=story_uses_images, story_note=story_note,
+    )
     return store.detail(prod["id"], jobs.all())
 
 
