@@ -121,6 +121,73 @@ class TimelineTests(unittest.TestCase):
             store.delete_shot("test", "s2")
         self.assertEqual([s["id"] for s in json.loads(self.plan.read_text())["scenes"][0]["shots"]], ["s1", "s3"])
 
+    def test_scenes_and_shots_can_be_created_edited_and_reordered(self):
+        with patch.object(store, "PROJECT", self.root), patch.object(store, "PRODUCTIONS", self.productions):
+            scene_id = store.add_scene("test", "blank", {
+                "name": "Roof top", "setting": "A wet rooftop", "audio": "Wind", "action": "A light appears",
+                "camera": "Push in", "seconds": 4,
+            })
+            store.add_shot("test", scene_id, {
+                "action": "The light rises", "camera": "Tilt up", "seconds": 3,
+            })
+            raw = json.loads(self.plan.read_text())
+            new_shot = raw["scenes"][1]["shots"][1]["id"]
+            store.update_shot("test", new_shot, {
+                "action": "The light becomes a star", "camera": "Hold", "seconds": 5,
+                "line": "", "character": None, "speaker": None, "delivery": "on",
+            })
+            store.update_scene("test", scene_id, "The roof after rain", "Wind and traffic")
+            store.reorder_scenes("test", [scene_id, "scene"])
+
+        raw = json.loads(self.plan.read_text())
+        self.assertEqual(raw["scenes"][0]["id"], scene_id)
+        self.assertEqual(raw["scenes"][0]["setting"], "The roof after rain")
+        self.assertEqual(raw["scenes"][0]["shots"][1]["action"], "The light becomes a star")
+        self.assertEqual(load_plan(self.plan).shots()[1].from_shot, raw["scenes"][0]["shots"][0]["id"])
+
+    def test_new_shot_rejects_an_invalid_duration(self):
+        with (
+            patch.object(store, "PROJECT", self.root),
+            patch.object(store, "PRODUCTIONS", self.productions),
+            self.assertRaisesRegex(Exception, "duration must be between"),
+        ):
+            store.add_shot("test", "scene", {"action": "Too short", "seconds": -1})
+
+    def test_imported_scene_copies_reference_and_finished_take(self):
+        source = self.productions / "source"
+        source.mkdir()
+        (source / "image.png").write_bytes(b"reference")
+        (source / "take.mp4").write_bytes(b"video")
+        (source / "plan.json").write_text(json.dumps({
+            "title": "Source", "style": "Film", "characters": {}, "props": {},
+            "scenes": [{"id": "arrival", "setting": "Station", "audio": "Trains", "shots": [
+                {"id": "arrive", "start": "anchor", "image": "image.png", "action": "A train arrives", "seconds": 3}
+            ]}],
+        }))
+        source_out = source / "out"
+        source_out.mkdir()
+        (source_out / "plan.resolved.json").write_text(json.dumps({
+            "arrive": {"shot": "arrive", "scene": "arrival", "start": "anchor", "prompt": "Train",
+                       "start_image": str(source / "image.png"), "takes": [{"index": 0, "seed": 1,
+                       "path": str(source / "take.mp4"), "render_s": 1, "cached": False, "seconds": 3,
+                       "failures": [], "passed": True}], "chosen": 0, "needs_review": False}
+        }))
+        (source / "production.json").write_text(json.dumps({
+            "id": "source", "plan": "productions/source/plan.json", "out": "productions/source/out",
+            "updated": 0, "steps": {},
+        }))
+
+        with patch.object(store, "PROJECT", self.root), patch.object(store, "PRODUCTIONS", self.productions):
+            scene_id = store.add_scene("test", "import", {
+                "source_production": "source", "source_scene": "arrival", "reuse_takes": True,
+            })
+
+        raw = json.loads(self.plan.read_text())
+        scene = next(scene for scene in raw["scenes"] if scene["id"] == scene_id)
+        self.assertTrue((self.plan.parent / scene["shots"][0]["image"]).exists())
+        result = json.loads((self.folder / "out" / "plan.resolved.json").read_text())[scene["shots"][0]["id"]]
+        self.assertEqual(Path(result["takes"][0]["path"]).read_bytes(), b"video")
+
     def test_shot_references_can_be_added_replaced_and_removed(self):
         with patch.object(store, "PROJECT", self.root), patch.object(store, "PRODUCTIONS", self.productions):
             store.set_shot_reference("test", "s2", "start", "opening.jpg", b"first")

@@ -28,6 +28,32 @@ VOICE_SCHEMA = {
     "required": ["description", "text"],
 }
 
+
+def normalize_screenplay(data: dict, cast: dict, *, allow_dialogue: bool = True) -> None:
+    """Repair predictable small-model slips before the strict screenplay validator runs."""
+    cast_ids = [character["id"] for character in cast.get("characters", [])]
+    used: set[str] = set()
+    for i, scene in enumerate(data.get("scenes", []), 1):
+        slug = "".join(ch if ch.isalnum() else "_" for ch in scene.get("id", "").lower()).strip("_") or f"scene_{i}"
+        while slug in used:
+            slug += f"_{i}"
+        scene["id"] = slug
+        used.add(slug)
+        for beat in scene.get("beats", []):
+            if not allow_dialogue:
+                beat["line"] = None
+                beat["delivery"] = None
+                continue
+            if beat.get("line") and not beat.get("character"):
+                if len(cast_ids) == 1:
+                    beat["character"] = cast_ids[0]
+                else:
+                    # A crowd chant, song or other ensemble sound has no single cast voice to clone. Keep the
+                    # visual action (which usually already describes it) and treat the quoted text as ambience.
+                    beat["line"] = None
+                    beat["delivery"] = None
+
+
 class LocalPlanner:
     def __init__(self, pid: str, emit: Emit):
         self.pid = pid
@@ -38,6 +64,10 @@ class LocalPlanner:
 
     def _event(self, kind: str, step: str, text: str = "") -> None:
         self.emit("trace", path=f"LocalPlanner.{step}", agent=step, kind=kind, text=text)
+
+    def _dialogue_allowed(self) -> bool:
+        direction = self.prod.get("story_prompt") or ""
+        return not re.search(r"\b(?:no|without)\s+(?:spoken\s+)?(?:dialogue|speech|speaking|voices?)\b", direction, re.I)
 
     def _ask(self, step: str, schema: dict, prompt: str) -> dict:
         self._event("input", step, prompt[:1200])
@@ -67,17 +97,7 @@ class LocalPlanner:
                         character["voice_phrase"] = "in a warm, clear, mature voice"
             if key == "screenplay":
                 cast = preprod.load(self.pid, "cast") or {"characters": []}
-                cast_ids = [c["id"] for c in cast["characters"]]
-                used: set[str] = set()
-                for i, scene in enumerate(data.get("scenes", []), 1):
-                    slug = "".join(ch if ch.isalnum() else "_" for ch in scene.get("id", "").lower()).strip("_") or f"scene_{i}"
-                    while slug in used:
-                        slug += f"_{i}"
-                    scene["id"] = slug
-                    used.add(slug)
-                    for beat in scene.get("beats", []):
-                        if beat.get("line") and not beat.get("character") and len(cast_ids) == 1:
-                            beat["character"] = cast_ids[0]
+                normalize_screenplay(data, cast, allow_dialogue=self._dialogue_allowed())
                 desired = max(1, round(self.prod["target_seconds"] / 4))
                 scenes = data.get("scenes", [])
                 if scenes:
@@ -120,6 +140,11 @@ Story:\n{story}""",
         play = preprod.load(self.pid, "screenplay")
         screenplay_changed = False
         if play:
+            before = json.dumps(play, sort_keys=True)
+            normalize_screenplay(play, cast, allow_dialogue=self._dialogue_allowed())
+            if json.dumps(play, sort_keys=True) != before:
+                preprod.save(self.pid, "screenplay", play)
+                screenplay_changed = True
             checked = SaveScreenplay().run(self.pid, {"screenplay": play})
             if not checked.get("ok"):
                 play = None
@@ -197,6 +222,12 @@ not screenplay dialogue, without shouting or whispering.""",
                 raise RuntimeError(f"deterministic local shot plan was rejected: {result}")
         plan = preprod.load(self.pid, "plan")
         shot_count = sum(len(s["shots"]) for s in plan["scenes"])
+        from .api import store
+
+        store.set_step(self.pid, "plan", "awaiting_approval")
+        store.set_step(self.pid, "keyframes", "skipped")
+        if not speakers:
+            store.set_step(self.pid, "voice", "skipped")
         summary = f"Local planning complete: {len(cast['characters'])} character(s), {len(play['scenes'])} scene(s), {shot_count} shots, and {len(speakers)} cast voice(s)."
         self._event("answer", "LocalPlanner", summary)
         return summary

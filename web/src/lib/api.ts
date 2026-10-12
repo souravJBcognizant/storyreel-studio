@@ -116,6 +116,29 @@ export interface Scene {
   shots: Shot[];
 }
 
+export interface ShotEditInput {
+  action: string;
+  camera: string;
+  seconds: number;
+  line: string;
+  character: string | null;
+  speaker: string | null;
+  delivery: "on" | "off";
+}
+
+export interface SceneCreateInput {
+  mode: "blank" | "duplicate" | "import";
+  name?: string;
+  setting?: string;
+  audio?: string;
+  action?: string;
+  camera?: string;
+  seconds?: number;
+  source_production?: string | null;
+  source_scene?: string | null;
+  reuse_takes?: boolean;
+}
+
 export interface Character {
   id: string;
   bible: string;
@@ -374,6 +397,38 @@ export const api = {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ shot_ids: shotIds }),
+    }),
+  addScene: (id: string, input: SceneCreateInput) =>
+    request<Production>(`/api/productions/${id}/scenes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+  reorderScenes: (id: string, sceneIds: string[]) =>
+    request<Production>(`/api/productions/${id}/scenes/order`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scene_ids: sceneIds }),
+    }),
+  updateScene: (id: string, scene: string, setting: string, audio: string) =>
+    request<Production>(`/api/productions/${id}/scenes/${scene}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ setting, audio }),
+    }),
+  deleteScene: (id: string, scene: string) =>
+    request<Production>(`/api/productions/${id}/scenes/${scene}`, { method: "DELETE" }),
+  addShot: (id: string, scene: string, input: ShotEditInput & { after?: string | null }) =>
+    request<Production>(`/api/productions/${id}/scenes/${scene}/shots`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+  updateShot: (id: string, shot: string, input: ShotEditInput) =>
+    request<Production>(`/api/productions/${id}/shots/${shot}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
     }),
   setShotReference: (id: string, shot: string, edge: "start" | "end", file: File) => {
     const form = new FormData();

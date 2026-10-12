@@ -148,7 +148,7 @@ export function ProductionPage() {
         {tab === "agents" && <AgentsTab p={p} />}
         {tab === "film" && <FilmTab p={p} onOpenShot={openShot} />}
         {tab === "shots" && <ShotsTab p={p} onOpenShot={openShot} />}
-        {tab === "plan" && <PlanTab p={p} />}
+        {tab === "plan" && <PlanTab p={p} onOpenShot={openShot} />}
         {tab === "activity" && <ActivityTab p={p} onCancel={() => cancel.mutate()} />}
         {tab === "files" && <FileBrowser root={filesRoot} />}
       </div>

@@ -160,6 +160,43 @@ class ShotOrder(BaseModel):
     shot_ids: list[str]
 
 
+class SceneOrder(BaseModel):
+    scene_ids: list[str]
+
+
+class SceneEdit(BaseModel):
+    setting: str
+    audio: str
+
+
+class SceneCreate(BaseModel):
+    mode: Literal["blank", "duplicate", "import"] = "blank"
+    name: str = ""
+    setting: str = ""
+    audio: str = ""
+    action: str = ""
+    camera: str = ""
+    seconds: float = 4
+    source_production: str | None = None
+    source_scene: str | None = None
+    reuse_takes: bool = True
+
+
+class ShotEdit(BaseModel):
+    action: str
+    camera: str = ""
+    seconds: float = 4
+    line: str = ""
+    character: str | None = None
+    speaker: str | None = None
+    delivery: Literal["on", "off"] = "on"
+
+
+class ShotCreate(ShotEdit):
+    id: str = ""
+    after: str | None = None
+
+
 def ensure_idle(pid: str) -> None:
     if any(j["production"] == pid and j["status"] in ("queued", "running", "cancelling") for j in jobs.all()):
         raise HTTPException(409, "wait for the current job to finish before editing the timeline")
@@ -169,6 +206,48 @@ def ensure_idle(pid: str) -> None:
 def reorder_shots(pid: str, scene_id: str, body: ShotOrder):
     ensure_idle(pid)
     store.reorder_shots(pid, scene_id, body.shot_ids)
+    return store.detail(pid, jobs.all())
+
+
+@app.post("/api/productions/{pid}/scenes")
+def add_scene(pid: str, body: SceneCreate):
+    ensure_idle(pid)
+    store.add_scene(pid, body.mode, body.model_dump())
+    return store.detail(pid, jobs.all())
+
+
+@app.put("/api/productions/{pid}/scenes/order")
+def reorder_scenes(pid: str, body: SceneOrder):
+    ensure_idle(pid)
+    store.reorder_scenes(pid, body.scene_ids)
+    return store.detail(pid, jobs.all())
+
+
+@app.put("/api/productions/{pid}/scenes/{scene_id}")
+def update_scene(pid: str, scene_id: str, body: SceneEdit):
+    ensure_idle(pid)
+    store.update_scene(pid, scene_id, body.setting, body.audio)
+    return store.detail(pid, jobs.all())
+
+
+@app.delete("/api/productions/{pid}/scenes/{scene_id}")
+def delete_scene(pid: str, scene_id: str):
+    ensure_idle(pid)
+    store.delete_scene(pid, scene_id)
+    return store.detail(pid, jobs.all())
+
+
+@app.post("/api/productions/{pid}/scenes/{scene_id}/shots")
+def add_shot(pid: str, scene_id: str, body: ShotCreate):
+    ensure_idle(pid)
+    store.add_shot(pid, scene_id, body.model_dump(), body.after)
+    return store.detail(pid, jobs.all())
+
+
+@app.put("/api/productions/{pid}/shots/{sid}")
+def update_shot(pid: str, sid: str, body: ShotEdit):
+    ensure_idle(pid)
+    store.update_shot(pid, sid, body.model_dump())
     return store.detail(pid, jobs.all())
 
 

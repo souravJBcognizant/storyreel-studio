@@ -193,10 +193,21 @@ aligned to the timing of the original performance before the film is rebuilt.
 
 ### Change the timeline
 
-Open the **Plan** tab to change the finished film's order. Each shot has controls to move it earlier or
-later within its scene, or remove it from the timeline. Reordering and removal keep existing render files
-in the cache, mark the film as needing a new render, and repair continuation links where necessary. Click
-**Re-render** afterwards; unchanged shots are reused.
+Open the **Plan** tab to build or revise the timeline after the first plan has been created:
+
+- Click **Add scene** to start a blank scene, duplicate one from the current production, or import one
+  from another production. An imported scene copies its reference images, required character and voice
+  assets, and—when selected—finished takes. It remains usable if the source production is deleted.
+- Use the controls in a scene header to edit its setting and sound, move it earlier or later, duplicate it,
+  or delete it.
+- Click **Add shot to scene**, or the plus beside an existing shot to insert immediately after it. A shot's
+  action, camera, length, character, line, speaker, and on/off-camera delivery can all be edited in place.
+- Click anywhere else on a shot to open its reference images, takes, audio options, and re-render controls.
+  Shots can also be reordered within their scene or removed from the timeline.
+
+Timeline changes keep existing render files in the cache, mark the film as needing a new render, and repair
+continuation links where necessary. A newly added shot without its own start frame continues from the final
+frame of the shot immediately before it. Click **Re-render** afterwards; unchanged shots are reused.
 
 To remove an entire production, return to **Productions**, hover over its card, click the trash icon and
 confirm. This permanently deletes that production's local inputs, plans, takes and finished film. Imported

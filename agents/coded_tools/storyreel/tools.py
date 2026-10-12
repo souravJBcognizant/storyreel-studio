@@ -556,5 +556,7 @@ class SavePlan(StoryTool):
         store.set_step(pid, "plan", "awaiting_approval")
         store.set_step(pid, "keyframes", "skipped" if local else "awaiting_approval")
         shots = parsed.shots()
+        if not any(shot.line for shot in shots):
+            store.set_step(pid, "voice", "skipped")
         seconds = sum(sh.seconds or SECONDS_PER_BEAT for sh in shots)
         return {"ok": True, "shots": len(shots), "lines": sum(1 for sh in shots if sh.line), "estimated_seconds": seconds}

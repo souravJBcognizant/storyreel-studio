@@ -4,6 +4,7 @@ A production's detail joins four sources: production.json (inputs and stage stat
 the pipeline's plan.resolved.json (finished shots) and events.jsonl (what is happening right now).
 """
 
+import copy
 import hashlib
 import json
 import os
@@ -344,6 +345,303 @@ def _repair_continuations(raw: dict) -> None:
                         shot["start"] = "fresh"
                         shot.pop("from", None)
             seen.append(shot["id"])
+
+
+def _raw_plan(pid: str) -> tuple[dict, Path, dict]:
+    prod = _read(pid)
+    plan_path = _path(prod.get("plan"))
+    if not plan_path:
+        raise HTTPException(409, "this production has no shot plan yet")
+    return prod, plan_path, json.loads(plan_path.read_text())
+
+
+def _unique_id(base: str, existing: set[str]) -> str:
+    base = re.sub(r"[^a-z0-9]+", "_", base.lower()).strip("_")[:40] or "item"
+    candidate, n = base, 2
+    while candidate in existing:
+        candidate, n = f"{base}_{n}", n + 1
+    return candidate
+
+
+def _previous_last_shot(raw: dict) -> str | None:
+    shots = [shot["id"] for scene in raw["scenes"] for shot in scene["shots"]]
+    return shots[-1] if shots else None
+
+
+def _new_shot(raw: dict, scene_id: str, data: dict) -> dict:
+    all_ids = {shot["id"] for scene in raw["scenes"] for shot in scene["shots"]}
+    shot_id = _unique_id(data.get("id") or f"{scene_id}_shot", all_ids)
+    line = (data.get("line") or "").strip() or None
+    character = data.get("character") or None
+    speaker = data.get("speaker") or character if line else None
+    delivery = data.get("delivery", "on")
+    seconds = float(data.get("seconds") or 4)
+    if not 0.5 <= seconds <= 60:
+        raise HTTPException(422, "shot duration must be between 0.5 and 60 seconds")
+    shot = {
+        "id": shot_id,
+        "start": "fresh",
+        "action": (data.get("action") or "A quiet visual beat unfolds.").strip(),
+        "camera": (data.get("camera") or "").strip(),
+        "seconds": seconds,
+        "takes": int(data.get("takes") or 1),
+    }
+    if character:
+        shot["character"] = character
+    if line:
+        shot.update(line=line, speaker=speaker, delivery=delivery)
+    return shot
+
+
+def reorder_scenes(pid: str, scene_ids: list[str]) -> None:
+    _, _, raw = _raw_plan(pid)
+    current = [scene["id"] for scene in raw["scenes"]]
+    if len(scene_ids) != len(set(scene_ids)) or set(scene_ids) != set(current):
+        raise HTTPException(422, "the new order must contain every scene exactly once")
+    by_id = {scene["id"]: scene for scene in raw["scenes"]}
+    raw["scenes"] = [by_id[sid] for sid in scene_ids]
+    _repair_continuations(raw)
+    _write_plan(pid, raw)
+
+
+def update_scene(pid: str, scene_id: str, setting: str, audio: str) -> None:
+    _, _, raw = _raw_plan(pid)
+    scene = next((scene for scene in raw["scenes"] if scene["id"] == scene_id), None)
+    if not scene:
+        raise HTTPException(404, f"no scene {scene_id!r}")
+    if not setting.strip() or not audio.strip():
+        raise HTTPException(422, "a scene needs a setting and sound description")
+    scene.update(setting=setting.strip(), audio=audio.strip())
+    _write_plan(pid, raw)
+
+
+def delete_scene(pid: str, scene_id: str) -> None:
+    _, _, raw = _raw_plan(pid)
+    if not any(scene["id"] == scene_id for scene in raw["scenes"]):
+        raise HTTPException(404, f"no scene {scene_id!r}")
+    if len(raw["scenes"]) == 1:
+        raise HTTPException(422, "a production must keep at least one scene")
+    raw["scenes"] = [scene for scene in raw["scenes"] if scene["id"] != scene_id]
+    _repair_continuations(raw)
+    _write_plan(pid, raw)
+
+
+def add_shot(pid: str, scene_id: str, data: dict, after: str | None = None) -> str:
+    _, _, raw = _raw_plan(pid)
+    scene = next((scene for scene in raw["scenes"] if scene["id"] == scene_id), None)
+    if not scene:
+        raise HTTPException(404, f"no scene {scene_id!r}")
+    shot = _new_shot(raw, scene_id, data)
+    index = len(scene["shots"])
+    if after is not None:
+        try:
+            index = next(i + 1 for i, item in enumerate(scene["shots"]) if item["id"] == after)
+        except StopIteration:
+            raise HTTPException(404, f"no shot {after!r} in scene {scene_id!r}") from None
+    scene["shots"].insert(index, shot)
+    _repair_continuations(raw)
+    _write_plan(pid, raw)
+    return shot["id"]
+
+
+def update_shot(pid: str, shot_id: str, data: dict) -> None:
+    _, _, raw = _raw_plan(pid)
+    shot = next((shot for scene in raw["scenes"] for shot in scene["shots"] if shot["id"] == shot_id), None)
+    if not shot:
+        raise HTTPException(404, f"no shot {shot_id!r}")
+    action = (data.get("action") or "").strip()
+    if not action:
+        raise HTTPException(422, "a shot needs an action")
+    line = (data.get("line") or "").strip() or None
+    character = data.get("character") or None
+    speaker = data.get("speaker") or character if line else None
+    delivery = data.get("delivery", "on")
+    seconds = float(data.get("seconds") or 4)
+    if not 0.5 <= seconds <= 60:
+        raise HTTPException(422, "shot duration must be between 0.5 and 60 seconds")
+    shot.update(action=action, camera=(data.get("camera") or "").strip(), seconds=seconds)
+    if character:
+        shot["character"] = character
+    else:
+        shot.pop("character", None)
+    if line:
+        shot.update(line=line, speaker=speaker, delivery=delivery)
+    else:
+        for field in ("line", "speaker", "delivery"):
+            shot.pop(field, None)
+    _write_plan(pid, raw)
+
+
+def _copy_plan_file(value: str, source_root: Path, target_root: Path, target_folder: Path) -> str:
+    source = Path(value).expanduser()
+    source = source if source.is_absolute() else (source_root / source).resolve()
+    if not source.exists() or not source.is_file():
+        return value
+    target_folder.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()[:12]
+    target = target_folder / f"{digest}_{source.name}"
+    if not target.exists():
+        shutil.copy2(source, target)
+    return os.path.relpath(target, target_root)
+
+
+def _copy_character(character: dict, source_root: Path, target_root: Path, folder: Path) -> dict:
+    cloned = copy.deepcopy(character)
+    for field in ("canonical_image", "voice", "sheet"):
+        if cloned.get(field):
+            cloned[field] = _copy_plan_file(cloned[field], source_root, target_root, folder)
+    cloned["voice_refs"] = [
+        _copy_plan_file(value, source_root, target_root, folder) for value in cloned.get("voice_refs", [])
+    ]
+    return cloned
+
+
+def _copy_result(source_result: dict, source_out: Path, target_out: Path, shot_id: str, scene_id: str) -> dict | None:
+    result = copy.deepcopy(source_result)
+    target_takes = target_out / "takes"
+    target_takes.mkdir(parents=True, exist_ok=True)
+    copied = []
+    chosen_source = int(result.get("chosen", 0))
+    chosen_target = 0
+    for i, take in enumerate(result.get("takes", [])):
+        source_video = Path(take.get("path", ""))
+        source_video = source_video if source_video.is_absolute() else (PROJECT / source_video).resolve()
+        if not source_video.exists():
+            continue
+        stem = f"{shot_id}_import_{i}"
+        target_video = target_takes / f"{stem}{source_video.suffix}"
+        shutil.copy2(source_video, target_video)
+        take["path"] = str(target_video)
+        if take.get("dub"):
+            source_dub = Path(take["dub"])
+            source_dub = source_dub if source_dub.is_absolute() else (PROJECT / source_dub).resolve()
+            if source_dub.exists():
+                target_dub = target_takes / f"{stem}.dub{source_dub.suffix}"
+                shutil.copy2(source_dub, target_dub)
+                take["dub"] = str(target_dub)
+            else:
+                take["dub"] = None
+        source_contact = source_out / "contact" / f"{source_video.stem}.png"
+        if source_contact.exists():
+            target_contact = target_out / "contact" / f"{target_video.stem}.png"
+            target_contact.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_contact, target_contact)
+        if i == chosen_source:
+            chosen_target = len(copied)
+        copied.append(take)
+    if not copied:
+        return None
+    result.update(shot=shot_id, scene=scene_id, takes=copied)
+    result["chosen"] = chosen_target
+    return result
+
+
+def add_scene(pid: str, mode: str, data: dict) -> str:
+    prod, plan_path, raw = _raw_plan(pid)
+    existing_scenes = {scene["id"] for scene in raw["scenes"]}
+    existing_shots = {shot["id"] for scene in raw["scenes"] for shot in scene["shots"]}
+    source_pid = data.get("source_production") or pid
+    source_scene_id = data.get("source_scene")
+    imported_results: dict[str, dict] = {}
+
+    if mode == "blank":
+        scene_id = _unique_id(data.get("name") or data.get("setting") or "scene", existing_scenes)
+        scene = {
+            "id": scene_id,
+            "setting": (data.get("setting") or "A new location").strip(),
+            "audio": (data.get("audio") or "Natural ambient sound").strip(),
+            "shots": [],
+        }
+        scene["shots"].append(_new_shot(raw, scene_id, data))
+    elif mode in ("duplicate", "import"):
+        _, source_plan_path, source_raw = _raw_plan(source_pid)
+        source_scene = next((scene for scene in source_raw["scenes"] if scene["id"] == source_scene_id), None)
+        if not source_scene:
+            raise HTTPException(404, f"no scene {source_scene_id!r} in production {source_pid!r}")
+        scene = copy.deepcopy(source_scene)
+        scene_id = _unique_id(scene["id"], existing_scenes)
+        scene["id"] = scene_id
+
+        character_map: dict[str, str] = {}
+        used_characters = {
+            value for shot in scene["shots"] for value in (shot.get("character"), shot.get("speaker")) if value
+        }
+        asset_folder = PRODUCTIONS / pid / "inputs" / "scene_imports" / scene_id
+        for character_id in used_characters:
+            source_character = source_raw.get("characters", {}).get(character_id)
+            if not source_character:
+                continue
+            target_id = character_id
+            if target_id in raw.get("characters", {}) and (
+                source_pid != pid or raw["characters"][target_id] != source_character
+            ):
+                target_id = _unique_id(f"{source_pid}_{character_id}", set(raw.get("characters", {})))
+            character_map[character_id] = target_id
+            if target_id not in raw.setdefault("characters", {}):
+                raw["characters"][target_id] = _copy_character(
+                    source_character, source_plan_path.parent, plan_path.parent, asset_folder / "characters"
+                )
+
+        prop_map: dict[str, str] = {}
+        used_props = {
+            name
+            for shot in scene["shots"]
+            for name in re.findall(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}", shot.get("action", ""))
+        }
+        for prop_id in used_props:
+            if prop_id not in source_raw.get("props", {}):
+                continue
+            target_id = prop_id
+            if target_id in raw.setdefault("props", {}) and raw["props"][target_id] != source_raw["props"][prop_id]:
+                target_id = _unique_id(f"{source_pid}_{prop_id}", set(raw["props"]))
+            prop_map[prop_id] = target_id
+            raw["props"].setdefault(target_id, source_raw["props"][prop_id])
+
+        source_result_map = _resolved(_path(_read(source_pid)["out"]))
+        id_map: dict[str, str] = {}
+        for source_shot in scene["shots"]:
+            new_id = _unique_id(source_shot["id"], existing_shots | set(id_map.values()))
+            id_map[source_shot["id"]] = new_id
+            source_shot["id"] = new_id
+            for field in ("character", "speaker"):
+                if source_shot.get(field) in character_map:
+                    source_shot[field] = character_map[source_shot[field]]
+            for field in ("image", "end_image"):
+                if source_shot.get(field):
+                    source_shot[field] = _copy_plan_file(
+                        source_shot[field], source_plan_path.parent, plan_path.parent, asset_folder / "references"
+                    )
+            for old_prop, new_prop in prop_map.items():
+                source_shot["action"] = source_shot.get("action", "").replace(
+                    "{" + old_prop + "}", "{" + new_prop + "}"
+                )
+        previous = _previous_last_shot(raw)
+        for source_id, shot in zip(id_map, scene["shots"]):
+            if shot.get("from") in id_map:
+                shot["from"] = id_map[shot["from"]]
+            elif shot.get("start") == "continue" and previous:
+                shot["from"] = previous
+            source_result = source_result_map.get(source_id)
+            if data.get("reuse_takes", True) and source_result:
+                source_out = _path(_read(source_pid)["out"])
+                target_out = _path(prod["out"])
+                result = _copy_result(source_result, source_out, target_out, shot["id"], scene_id)
+                if result:
+                    imported_results[shot["id"]] = result
+            previous = shot["id"]
+    else:
+        raise HTTPException(422, "scene mode must be blank, duplicate or import")
+
+    raw["scenes"].append(scene)
+    _repair_continuations(raw)
+    _write_plan(pid, raw)
+    if imported_results:
+        target_out = _path(prod["out"])
+        target_out.mkdir(parents=True, exist_ok=True)
+        resolved = _resolved(target_out)
+        resolved.update(imported_results)
+        (target_out / "plan.resolved.json").write_text(json.dumps(resolved, indent=2))
+    return scene_id
 
 
 def reorder_shots(pid: str, scene_id: str, shot_ids: list[str]) -> None:
