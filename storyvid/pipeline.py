@@ -318,7 +318,6 @@ class Director:
         result = self.results[shot.id]
         take = result.takes[result.chosen]
         character = self.plan.characters[shot.speaker]
-        cast_line = self.dubber.directed_line(character.voice_phrase, shot.line, direction)
         if shot.delivery == "on":
             if take.performance is None:
                 from mlx_audio.stt.utils import load_model
@@ -326,8 +325,12 @@ class Director:
                 self.stt = load_model(STT_MODEL)
                 _, take.performance = listen(self.stt, extract_audio(Path(take.path), Path(take.path).with_suffix(".wav")))
             self.dubber.stt = self.stt or self.dubber.stt
-            self._dub(shot, take, cast_line, take.performance, strict=True)
+            original = extract_audio(Path(take.path), Path(take.path).with_suffix(".wav"))
+            boundaries = self.dubber.phrase_boundaries(shot.line, take.performance, original, take.seconds)
+            cast_line = self.dubber.directed_line(character.voice_phrase, shot.line, direction, boundaries)
+            self._dub(shot, take, cast_line, take.performance, strict=True, phrase_generation=False)
         else:
+            cast_line = self.dubber.directed_line(character.voice_phrase, shot.line, direction)
             self._save_voice(shot, take, self.dubber.lay_over(cast_line, take.seconds).track)
         take.audio_prompt = direction.strip()
         result.needs_review = not take.passed
@@ -354,12 +357,12 @@ class Director:
             return last_frame(src, self.out / "anchors" / f"{shot.id}_from_{src.stem}.png")
         return None
 
-    def _cast_line(self, shot: Shot) -> Path | None:
+    def _cast_line(self, shot: Shot, boundaries: list[int] | None = None) -> Path | None:
         """Dubbed plans: the line in the speaker's cast voice, made before the picture (it sets off-camera lengths)."""
         if not (self.dubber and shot.line):
             return None
         c = self.plan.characters[shot.speaker]
-        return self.dubber.cast_line(c.voice, c.voice_text, shot.line)
+        return self.dubber.cast_line(c.voice, c.voice_text, shot.line, boundaries)
 
     def _frames(self, shot: Shot, cast_line: Path | None) -> int | None:
         if shot.line and shot.delivery == "on":
@@ -461,13 +464,18 @@ class Director:
             if verdict.speaker_is_talking or verdict.someone_else_talking:
                 take.failures.append("someone in view talks")
 
-    def _dub(self, shot: Shot, take: Take, cast_line: Path, said: list[tuple[str, float, float]], *, strict: bool = False) -> None:
+    def _dub(self, shot: Shot, take: Take, cast_line: Path, said: list[tuple[str, float, float]], *,
+             strict: bool = False, phrase_generation: bool = True) -> None:
         take.performance = said
         take.dub_words = None
         take.failures = [f for f in take.failures if not f.startswith("dub (")]
         try:
             path = Path(take.path)
             original = extract_audio(path, path.with_suffix(".wav"))
+            if phrase_generation:
+                boundaries = self.dubber.phrase_boundaries(shot.line, said, original, take.seconds)
+                if boundaries:
+                    cast_line = self._cast_line(shot, boundaries)
             dub = self.dubber.dub(said, cast_line, shot.line, take.seconds, original_audio=original)
             take.dub_words = f"{dub.words_found}/{len(words(shot.line))}"
         except DubError as exc:

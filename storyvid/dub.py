@@ -2,7 +2,8 @@
 
 Use the original recording as the timing reference. Measure speech onsets and pauses in both
 recordings, then align words inside each phrase with continuous, pitch-preserving time stretching.
-Only phrase boundaries are cut; individual words are never rendered as independent audio pieces.
+Strong punctuation can generate separate phrases when the performance contains the same pause. Only
+phrase boundaries are cut; individual words are never rendered as independent audio pieces.
 Off-camera lines keep their natural timing.
 
 Qwen3-TTS (Base) clones every line from the character's cast voice; Whisper supplies the word timings.
@@ -24,13 +25,40 @@ SR = 24000
 CLONE_MODEL = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"
 MAX_STRETCH = 1.3  # beyond about ±30% stretched speech sounds slowed down or sped up
 FADE = int(0.006 * SR)  # fade only the outer edges of a complete line
-DUB_VERSION = 3  # align to the original audio, including its lead-in and phrase pauses
+DUB_VERSION = 4  # generate strong-punctuation phrases when the original performance pauses there
 OFF_CAMERA_LEAD_S = 0.35
 SEED = 7
+PHRASE_GAP_S = 0.28
 
 
 def words(text: str) -> list[str]:
     return re.findall(r"[a-z0-9']+", text.lower())
+
+
+def punctuation_boundaries(text: str) -> list[int]:
+    """Word boundaries after strong punctuation, excluding the end of the line."""
+    total = len(words(text))
+    result = []
+    for match in re.finditer(r"(?:\.{2,}|…+|[.!?;]+)(?:[\"'”’)]*)\s+", text):
+        boundary = len(words(text[:match.end()]))
+        if 0 < boundary < total and (not result or result[-1] != boundary):
+            result.append(boundary)
+    return result
+
+
+def phrase_texts(text: str, boundaries: list[int]) -> list[str]:
+    """Split at selected word boundaries while retaining the original punctuation."""
+    wanted = set(boundaries)
+    if not wanted:
+        return [text.strip()]
+    pieces, start, seen = [], 0, 0
+    for match in re.finditer(r"\S+", text):
+        seen += len(words(match.group()))
+        if seen in wanted:
+            pieces.append(text[start:match.end()].strip())
+            start = match.end()
+    pieces.append(text[start:].strip())
+    return [piece for piece in pieces if piece]
 
 
 def listen(stt, audio: Path) -> tuple[str, list[tuple[str, float, float]]]:
@@ -66,8 +94,15 @@ class Dubber:
 
     # ------------------------------------------------------------ cast voice lines
 
-    def cast_line(self, voice: Path, voice_text: str, line: str) -> Path:
+    def cast_line(self, voice: Path, voice_text: str, line: str,
+                  boundaries: list[int] | None = None) -> Path:
         """The line in the cast voice, generated once per (voice, line) and cached."""
+        if boundaries:
+            return self._phrase_line(
+                "line", line, boundaries,
+                lambda phrase, _index: self.cast_line(voice, voice_text, phrase),
+                Path(voice).read_bytes() + f"|{voice_text}|{line}|{boundaries}|{SEED}|phrases-v1".encode(),
+            )
         key = hashlib.sha1(Path(voice).read_bytes() + f"|{voice_text}|{line}|{SEED}".encode()).hexdigest()[:12]
         out = self.cache / f"line_{key}.wav"
         if out.exists():
@@ -85,17 +120,51 @@ class Dubber:
         sf.write(out, audio[nz[0]: nz[-1] + 1] if len(nz) else audio, SR)
         return out
 
-    def directed_line(self, voice_description: str, line: str, direction: str) -> Path:
+    def directed_line(self, voice_description: str, line: str, direction: str,
+                      boundaries: list[int] | None = None) -> Path:
         """Generate an alternate delivery from a human direction without changing the words."""
-        key = hashlib.sha1(f"{voice_description}|{line}|{direction}".encode()).hexdigest()[:12]
+        if boundaries:
+            signature = f"{voice_description}|{line}|{direction}|{boundaries}|phrases-v1".encode()
+            return self._phrase_line(
+                "directed", line, boundaries,
+                lambda phrase, index: self._directed_phrase(voice_description, phrase, direction, index),
+                signature,
+            )
+        return self._directed_phrase(voice_description, line, direction, 0)
+
+    def _directed_phrase(self, voice_description: str, line: str, direction: str, index: int) -> Path:
+        key = hashlib.sha1(f"{voice_description}|{line}|{direction}|{index}".encode()).hexdigest()[:12]
         out = self.cache / f"directed_{key}.wav"
         if out.exists():
             return out
         from .casting import Casting
 
         prompt = f"{voice_description.strip()}. Delivery direction: {direction.strip()}"
-        seed = SEED + int(key[:8], 16) % 100_000
+        seed = SEED + index * 7919 + int(key[:8], 16) % 100_000
         return Casting().design(prompt, line, out, seed=seed)
+
+    def _phrase_line(self, prefix: str, line: str, boundaries: list[int], generate, signature: bytes) -> Path:
+        """Generate selected phrases independently, then join them with clean, detectable silence."""
+        phrases = phrase_texts(line, boundaries)
+        if len(phrases) == 1:
+            return generate(phrases[0], 0)
+        key = hashlib.sha1(signature).hexdigest()[:12]
+        out = self.cache / f"{prefix}_phrased_{key}.wav"
+        if out.exists():
+            return out
+        clips = [_read_voice(generate(phrase, i)) for i, phrase in enumerate(phrases)]
+        levels = [float(np.sqrt(np.mean(clip[np.abs(clip) > 1e-4] ** 2))) for clip in clips]
+        target_level = float(np.median(levels))
+        normalized = [clip * np.clip(target_level / level, .8, 1.25) if level else clip
+                      for clip, level in zip(clips, levels)]
+        gap = np.zeros(round(PHRASE_GAP_S * SR), dtype=np.float32)
+        audio = np.concatenate([part for i, clip in enumerate(normalized)
+                                for part in ((gap if i else np.empty(0, dtype=np.float32)), clip)])
+        sf.write(out, audio, SR, subtype="FLOAT")
+        out.with_suffix(".phrases.json").write_text(json.dumps({
+            "line": line, "boundaries": boundaries, "phrases": phrases, "gap_s": PHRASE_GAP_S,
+        }, indent=2))
+        return out
 
     # ------------------------------------------------------------ timing
 
@@ -141,6 +210,21 @@ class Dubber:
             tmp.replace(path)
         self._timings[key] = result
         return result
+
+    def phrase_boundaries(self, line: str, performance: list[tuple[str, float, float]],
+                          original_audio: Path, length_s: float) -> list[int]:
+        """Confirm strong-punctuation candidates against pauses measured in the original audio."""
+        from .alignment import matching_pauses
+
+        candidates = punctuation_boundaries(line)
+        if not candidates:
+            return []
+        expected = words(line)
+        target = self._map(expected, performance)
+        target = [span if span is not None and np.all(np.isfinite(span))
+                  and 0 <= span[0] < span[1] <= length_s + .1 else None for span in target]
+        original = _read_voice(original_audio)
+        return sorted(matching_pauses(original, target, length_s, set(candidates)))
 
     def dub(self, performance: list[tuple[str, float, float]], cast_line: Path, line: str,
             length_s: float, *, original_audio: Path) -> Dub:

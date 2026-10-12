@@ -117,9 +117,11 @@ To use a clip's original sound in the exported film, open the shot and set **Aud
 **Export MP4** when it finishes. The export is one complete, shareable MP4 containing the full picture
 and soundtrack. Rebuilding reuses the video takes and updates older audio overlays.
 The overlay follows the original recording's speech starts, pauses, and word timing, using continuous
-time stretching within each phrase to keep speech smooth. This improves sync without regenerating
-the video. Exact lip sync still depends on the original performance and timing recognition; choose
-original audio when the two deliveries differ too much to align naturally.
+time stretching within each phrase to keep speech smooth. When a period, ellipsis, question mark,
+exclamation point, or semicolon coincides with a real pause in the original performance, the studio
+generates the phrases on either side separately so each can be aligned to that pause. This improves
+sync without regenerating the video. Exact lip sync still depends on the original performance and
+timing recognition; choose original audio when the two deliveries differ too much to align naturally.
 
 To revise one shot, open it and describe the change under **Generate a new clip**. The studio renders
 new takes for that shot, selects the best result through the same checks, and rebuilds the MP4 without

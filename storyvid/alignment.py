@@ -64,6 +64,18 @@ def pause_boundaries(profile: Activity, spans: list, common: list[int]) -> dict[
     return result
 
 
+def matching_pauses(original: np.ndarray, target: list, length_s: float,
+                    candidates: set[int]) -> dict[int, tuple[float, float]]:
+    """Return punctuation boundaries that are backed by a real pause in the performance."""
+    common = [i for i, span in enumerate(target) if span is not None]
+    if len(common) < 2 or not candidates:
+        return {}
+    profile = activity(original, max(0, target[common[0]][0] - .2),
+                       min(length_s, target[common[-1]][1] + .35))
+    measured = pause_boundaries(profile, target, common)
+    return {j: pause for j, pause in measured.items() if j in candidates}
+
+
 def _boundary(spans: list, j: int) -> tuple[float, float]:
     point = (spans[j - 1][1] + spans[j][0]) / 2
     return point, point

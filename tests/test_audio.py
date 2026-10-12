@@ -12,7 +12,7 @@ import soundfile as sf
 from fastapi.testclient import TestClient
 
 from storyvid import soundtrack
-from storyvid.dub import DUB_VERSION, SR, Dub, Dubber, DubError, _stretch
+from storyvid.dub import DUB_VERSION, SR, Dub, Dubber, DubError, _stretch, phrase_texts, punctuation_boundaries
 from storyvid.edit import load_choices, save_choice, write_json
 from storyvid.media import duration, ffmpeg
 from storyvid.pipeline import Director, ShotResult, Take
@@ -112,6 +112,36 @@ class ContinuousDubTests(unittest.TestCase):
             made = self.dubber.directed_line("Calm and warm", "The scripted words", "More hesitant")
         self.assertTrue(made.exists())
         self.assertEqual(design.call_count, 1)
+
+    def test_strong_punctuation_makes_phrase_candidates(self):
+        line = "The results... the results scale... I'm sorry."
+        boundaries = punctuation_boundaries(line)
+        self.assertEqual(boundaries, [2, 5])
+        self.assertEqual(phrase_texts(line, boundaries),
+                         ["The results...", "the results scale...", "I'm sorry."])
+
+    def test_only_original_pauses_confirm_punctuation_boundaries(self):
+        # There is a real pause after "home" but continuous speech before "tonight".
+        original = self.root / "original.wav"
+        wave = np.concatenate([tone(220, .5), np.zeros(round(.45 * SR)), tone(330, 1.)])
+        sf.write(original, wave, SR)
+        performance = [("home", 0, .5), ("alone", .95, 1.45), ("tonight", 1.45, 1.95)]
+        self.assertEqual(self.dubber.phrase_boundaries("Home. Alone. Tonight.", performance, original, 1.95), [1])
+
+    def test_confirmed_phrases_are_generated_separately_and_joined_with_silence(self):
+        calls = []
+
+        def generate(phrase, index):
+            calls.append(phrase)
+            path = self.root / f"phrase-{index}.wav"
+            sf.write(path, tone(220 + index * 20, .4), SR, subtype="FLOAT")
+            return path
+
+        made = self.dubber._phrase_line("line", "Home. Alone. Tonight.", [1, 2], generate, b"test")
+        audio, _ = sf.read(made, dtype="float32")
+        self.assertEqual(calls, ["Home.", "Alone.", "Tonight."])
+        self.assertLess(np.max(np.abs(audio[round(.41 * SR):round(.66 * SR)])), 1e-6)
+        self.assertEqual(json.loads(made.with_suffix(".phrases.json").read_text())["boundaries"], [1, 2])
 
     def test_short_off_camera_clip_keeps_last_word(self):
         result = self.dubber.lay_over(self.voice, 1.2)
@@ -233,10 +263,11 @@ class ExportAudioTests(unittest.TestCase):
         take = director.results["s1"].takes[0]
         take.performance = [("hello", 0, 1.4), ("there", 1.4, 2.8)]
         director.dubber = Mock()
+        director.dubber.phrase_boundaries.return_value = []
         director.dubber.directed_line.return_value = self.video.with_suffix(".dub.wav")
         with patch.object(director, "_dub") as align, patch.object(director, "_finish_edit") as finish:
             director.edit_overlay("s1", "Quiet and hesitant")
-        director.dubber.directed_line.assert_called_once_with("Clear voice", "Hello there", "Quiet and hesitant")
+        director.dubber.directed_line.assert_called_once_with("Clear voice", "Hello there", "Quiet and hesitant", [])
         align.assert_called_once()
         finish.assert_called_once()
         self.assertEqual(take.audio_prompt, "Quiet and hesitant")
