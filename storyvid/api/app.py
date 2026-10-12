@@ -134,6 +134,18 @@ class AudioChoice(BaseModel):
     source: Literal["cast", "original"]
 
 
+class DuplicateProduction(BaseModel):
+    title: str
+
+
+@app.post("/api/productions/{pid}/duplicate")
+def duplicate_production(pid: str, body: DuplicateProduction):
+    if any(j["production"] == pid and j["status"] in ("queued", "running", "cancelling") for j in jobs.all()):
+        raise HTTPException(409, "wait for the source production's current job to finish")
+    prod = store.duplicate(pid, body.title)
+    return store.detail(prod["id"], jobs.all())
+
+
 @app.put("/api/productions/{pid}/shots/{sid}/audio")
 def choose_audio(pid: str, sid: str, body: AudioChoice):
     jobs.choose_audio(pid, sid, body.source)
@@ -164,6 +176,32 @@ def reorder_shots(pid: str, scene_id: str, body: ShotOrder):
 def delete_shot(pid: str, sid: str):
     ensure_idle(pid)
     store.delete_shot(pid, sid)
+    return store.detail(pid, jobs.all())
+
+
+@app.put("/api/productions/{pid}/shots/{sid}/references/{edge}")
+async def set_shot_reference(pid: str, sid: str, edge: Literal["start", "end"], frame: UploadFile = File(...)):
+    ensure_idle(pid)
+    if not (frame.content_type or "").startswith("image/"):
+        raise HTTPException(422, "the clip reference must be an image")
+    data = await frame.read()
+    if len(data) > MAX_FRAME_BYTES:
+        raise HTTPException(413, "the clip reference is larger than 25 MB")
+    store.set_shot_reference(pid, sid, edge, frame.filename or f"{edge}_reference.png", data)
+    return store.detail(pid, jobs.all())
+
+
+@app.delete("/api/productions/{pid}/shots/{sid}/references/{edge}")
+def remove_shot_reference(pid: str, sid: str, edge: Literal["start", "end"]):
+    ensure_idle(pid)
+    store.remove_shot_reference(pid, sid, edge)
+    return store.detail(pid, jobs.all())
+
+
+@app.put("/api/productions/{pid}/shots/{sid}/references/{edge}/neighbor")
+def set_neighbor_reference(pid: str, sid: str, edge: Literal["start", "end"]):
+    ensure_idle(pid)
+    store.set_neighbor_reference(pid, sid, edge)
     return store.detail(pid, jobs.all())
 
 

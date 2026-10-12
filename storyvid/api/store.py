@@ -4,9 +4,12 @@ A production's detail joins four sources: production.json (inputs and stage stat
 the pipeline's plan.resolved.json (finished shots) and events.jsonl (what is happening right now).
 """
 
+import hashlib
 import json
+import os
 import re
 import shutil
+import tempfile
 import time
 from pathlib import Path
 
@@ -15,6 +18,7 @@ from fastapi import HTTPException
 from ..events import latest_run
 from ..dub import DUB_VERSION
 from ..edit import audio_source, load_choices, load_edit, save_choice
+from ..media import first_frame, last_frame
 from ..plan import load_plan
 from .config import (
     IMAGE_ENGINE,
@@ -232,6 +236,73 @@ def create(title: str, story: str, frame_name: str, frame_bytes: bytes, target_s
     return prod
 
 
+def _remap_clone_value(value, source_dir: Path, target_dir: Path, source_id: str, target_id: str):
+    if isinstance(value, dict):
+        return {key: _remap_clone_value(item, source_dir, target_dir, source_id, target_id) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_remap_clone_value(item, source_dir, target_dir, source_id, target_id) for item in value]
+    if isinstance(value, str):
+        return value.replace(str(source_dir), str(target_dir)).replace(
+            f"productions/{source_id}/", f"productions/{target_id}/"
+        )
+    return value
+
+
+def duplicate(pid: str, title: str) -> dict:
+    """Create a self-contained copy whose media and metadata can diverge from the source."""
+    source = _read(pid)
+    if source.get("source", "").startswith("Stage"):
+        raise HTTPException(422, "imported test productions cannot be used as templates")
+    title = title.strip()
+    if len(title) < 2:
+        raise HTTPException(422, "give the copied production a title")
+    if len(title) > 120:
+        raise HTTPException(422, "keep the copied production title under 120 characters")
+    target_id = slugify(title)
+    source_dir = PRODUCTIONS / pid
+    target_dir = PRODUCTIONS / target_id
+    try:
+        shutil.copytree(source_dir, target_dir, ignore=shutil.ignore_patterns("jobs"))
+        for path in target_dir.rglob("*.json"):
+            try:
+                value = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            remapped = _remap_clone_value(value, source_dir, target_dir, pid, target_id)
+            path.write_text(json.dumps(remapped, indent=2))
+        for path in target_dir.rglob("*.jsonl"):
+            lines = []
+            for line in path.read_text().splitlines():
+                try:
+                    value = json.loads(line)
+                except json.JSONDecodeError:
+                    lines.append(line)
+                else:
+                    lines.append(json.dumps(_remap_clone_value(value, source_dir, target_dir, pid, target_id)))
+            path.write_text("\n".join(lines) + ("\n" if lines else ""))
+        cloned = json.loads((target_dir / "production.json").read_text())
+        now = time.time()
+        cloned.update(
+            id=target_id,
+            title=title,
+            created=now,
+            updated=now,
+            source=f"Copy of {source['title']}",
+            source_production=pid,
+        )
+        plan_path = _path(cloned.get("plan"))
+        if plan_path and plan_path.exists():
+            plan = json.loads(plan_path.read_text())
+            plan["title"] = title
+            plan_path.write_text(json.dumps(plan, indent=2))
+        _write(cloned)
+        return cloned
+    except Exception:
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        raise
+
+
 def delete(pid: str) -> None:
     prod = _read(pid)
     if prod.get("source", "").startswith("Stage"):
@@ -311,6 +382,123 @@ def delete_shot(pid: str, shot_id: str) -> None:
         raise HTTPException(422, "a production must keep at least one shot")
     _repair_continuations(raw)
     _write_plan(pid, raw)
+
+
+def _raw_shot(pid: str, shot_id: str) -> tuple[Path, dict, dict]:
+    prod = _read(pid)
+    plan_path = _path(prod.get("plan"))
+    if not plan_path:
+        raise HTTPException(409, "this production has no shot plan yet")
+    raw = json.loads(plan_path.read_text())
+    shot = next((shot for scene in raw["scenes"] for shot in scene["shots"] if shot["id"] == shot_id), None)
+    if not shot:
+        raise HTTPException(404, f"no shot {shot_id!r}")
+    return plan_path, raw, shot
+
+
+def _previous_shot_id(raw: dict, shot_id: str) -> str | None:
+    previous = None
+    for scene in raw["scenes"]:
+        for shot in scene["shots"]:
+            if shot["id"] == shot_id:
+                return previous
+            previous = shot["id"]
+    return None
+
+
+def _remove_owned_reference(plan_path: Path, value: str | None, owned: Path) -> None:
+    """Delete only images created by the shot-reference editor, never planning/keyframe inputs."""
+    if not value:
+        return
+    path = Path(value)
+    path = path if path.is_absolute() else (plan_path.parent / path).resolve()
+    try:
+        path.relative_to(owned.resolve())
+    except ValueError:
+        return
+    path.unlink(missing_ok=True)
+
+
+def set_shot_reference(pid: str, shot_id: str, edge: str, name: str, data: bytes) -> None:
+    if edge not in ("start", "end"):
+        raise HTTPException(422, "reference edge must be start or end")
+    plan_path, raw, shot = _raw_shot(pid, shot_id)
+    field = "image" if edge == "start" else "end_image"
+    previous = shot.get(field)
+    owned = PRODUCTIONS / pid / "inputs" / "shot_refs"
+    owned.mkdir(parents=True, exist_ok=True)
+    ext = Path(name).suffix.lower()
+    if ext not in (".jpg", ".jpeg", ".png", ".webp"):
+        ext = ".png"
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", shot_id).strip("-") or "shot"
+    digest = hashlib.sha256(data).hexdigest()[:12]
+    path = owned / f"{safe_id}_{edge}_{digest}{ext}"
+    created = not path.exists()
+    path.write_bytes(data)
+    shot[field] = os.path.relpath(path, plan_path.parent)
+    if edge == "start":
+        shot["start"] = "anchor"
+        shot.pop("from", None)
+    try:
+        _write_plan(pid, raw)
+    except Exception:
+        if created:
+            path.unlink(missing_ok=True)
+        raise
+    if previous != shot[field]:
+        _remove_owned_reference(plan_path, previous, owned)
+
+
+def remove_shot_reference(pid: str, shot_id: str, edge: str) -> None:
+    if edge not in ("start", "end"):
+        raise HTTPException(422, "reference edge must be start or end")
+    plan_path, raw, shot = _raw_shot(pid, shot_id)
+    field = "image" if edge == "start" else "end_image"
+    previous = shot.pop(field, None)
+    if not previous:
+        return
+    if edge == "start" and shot.get("start") == "anchor":
+        prior_shot = _previous_shot_id(raw, shot_id)
+        if prior_shot:
+            shot["start"] = "continue"
+            shot["from"] = prior_shot
+        else:
+            shot["start"] = "fresh"
+            shot.pop("from", None)
+    _write_plan(pid, raw)
+    _remove_owned_reference(plan_path, previous, PRODUCTIONS / pid / "inputs" / "shot_refs")
+
+
+def set_neighbor_reference(pid: str, shot_id: str, edge: str) -> None:
+    """Copy the adjacent chosen take's boundary frame into this shot's editable references."""
+    if edge not in ("start", "end"):
+        raise HTTPException(422, "reference edge must be start or end")
+    _, raw, _ = _raw_shot(pid, shot_id)
+    ids = [shot["id"] for scene in raw["scenes"] for shot in scene["shots"]]
+    index = ids.index(shot_id)
+    neighbor_index = index - 1 if edge == "start" else index + 1
+    if neighbor_index < 0 or neighbor_index >= len(ids):
+        label = "previous" if edge == "start" else "next"
+        raise HTTPException(422, f"this shot has no {label} shot")
+    neighbor_id = ids[neighbor_index]
+    prod = _read(pid)
+    out = _path(prod.get("out"))
+    resolved = _resolved(out)
+    result = resolved.get(neighbor_id)
+    if not result or result.get("chosen") is None:
+        raise HTTPException(409, f"render {neighbor_id} before using one of its frames")
+    try:
+        source = Path(result["takes"][result["chosen"]]["path"])
+    except (IndexError, KeyError, TypeError):
+        raise HTTPException(409, f"the chosen take for {neighbor_id} is unavailable") from None
+    source = source if source.is_absolute() else (PROJECT / source).resolve()
+    if not source.exists():
+        raise HTTPException(409, f"the chosen take for {neighbor_id} is unavailable")
+    boundary = "last" if edge == "start" else "first"
+    with tempfile.TemporaryDirectory() as folder:
+        frame = Path(folder) / f"{neighbor_id}_{boundary}.png"
+        (last_frame if edge == "start" else first_frame)(source, frame)
+        set_shot_reference(pid, shot_id, edge, frame.name, frame.read_bytes())
 
 
 def all_ids() -> list[str]:

@@ -360,6 +360,12 @@ export const api = {
   production: (id: string) => request<Production>(`/api/productions/${id}`),
   createProduction: (form: FormData) =>
     request<Production>("/api/productions", { method: "POST", body: form }),
+  duplicateProduction: (id: string, title: string) =>
+    request<Production>(`/api/productions/${id}/duplicate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    }),
   deleteProduction: (id: string) => request<{ deleted: string }>(`/api/productions/${id}`, { method: "DELETE" }),
   deleteShot: (id: string, shot: string) =>
     request<Production>(`/api/productions/${id}/shots/${shot}`, { method: "DELETE" }),
@@ -369,6 +375,15 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ shot_ids: shotIds }),
     }),
+  setShotReference: (id: string, shot: string, edge: "start" | "end", file: File) => {
+    const form = new FormData();
+    form.set("frame", file);
+    return request<Production>(`/api/productions/${id}/shots/${shot}/references/${edge}`, { method: "PUT", body: form });
+  },
+  removeShotReference: (id: string, shot: string, edge: "start" | "end") =>
+    request<Production>(`/api/productions/${id}/shots/${shot}/references/${edge}`, { method: "DELETE" }),
+  useNeighborReference: (id: string, shot: string, edge: "start" | "end") =>
+    request<Production>(`/api/productions/${id}/shots/${shot}/references/${edge}/neighbor`, { method: "PUT" }),
   startRender: (id: string) => request<Job>(`/api/productions/${id}/jobs?kind=render`, { method: "POST" }),
   rebuildFilm: (id: string) => request<Job>(`/api/productions/${id}/jobs?kind=export`, { method: "POST" }),
   chooseAudio: (id: string, shot: string, source: "cast" | "original") =>

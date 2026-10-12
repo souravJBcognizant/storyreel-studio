@@ -1,4 +1,4 @@
-import { Anchor, Clapperboard, Flag, Hourglass, Link2, Plug, Sparkles } from "lucide-react";
+import { Anchor, Clapperboard, Flag, Hourglass, Link2, MousePointerClick, Plug, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router";
 import { ShotGraph } from "../../components/pipeline/ShotGraph";
@@ -55,6 +55,10 @@ export function PipelineTab({ p, onOpenShot, onRender }: { p: Production; onOpen
             </div>
           }
         />
+        <p className="mb-3 flex items-center gap-2 text-[12px] text-fg-3">
+          <MousePointerClick className="size-3.5 text-amber" />
+          Click any shot to open its editor, review takes, change reference images, or generate a new clip.
+        </p>
         {p.scenes.length ? (
           <ShotGraph production={p} onOpen={onOpenShot} />
         ) : (

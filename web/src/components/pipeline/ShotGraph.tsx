@@ -11,7 +11,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import clsx from "clsx";
-import { Anchor, ImageIcon, Link2, Mic2, Sparkles } from "lucide-react";
+import { Anchor, ImageIcon, Link2, Mic2, Pencil, Sparkles } from "lucide-react";
 import { useMemo } from "react";
 import type { Production, Scene, Shot } from "../../lib/api";
 import { thumbUrl } from "../../lib/api";
@@ -48,7 +48,10 @@ export function ShotGraph({ production, onOpen }: { production: Production; onOp
         maxZoom={1.6}
         nodesDraggable={false}
         nodesConnectable={false}
-        elementsSelectable={false}
+        elementsSelectable
+        onNodeClick={(_, node) => {
+          if (node.type === "shot") onOpen(node.id);
+        }}
         proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="rgb(255 240 220 / 0.07)" />
@@ -123,6 +126,7 @@ function layout(production: Production, onOpen: (id: string) => void) {
       type: "ref",
       position: { x: 0, y: ref.y },
       data: { image, label: character ? `${character.id} · reference` : "reference frame" } satisfies RefData,
+      selectable: false,
     });
     ref.targets.forEach((t) =>
       edges.push({
@@ -149,9 +153,15 @@ function ShotNode({ data }: NodeProps<Node<ShotData>>) {
   const planned = Math.max(shot.takes_planned, shot.takes.length + (shot.status === "rendering" ? 1 : 0));
   return (
     <button
-      onClick={() => onOpen(shot.id)}
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpen(shot.id);
+      }}
+      aria-label={`Edit shot ${shot.id}`}
+      title={`Edit shot ${shot.id}`}
       className={clsx(
-        "group relative flex w-[212px] flex-col justify-start overflow-hidden rounded-xl border bg-ink-800 text-left shadow-[var(--shadow-card)] transition-all hover:-translate-y-0.5 hover:border-white/20",
+        "nodrag nopan group relative flex w-[212px] cursor-pointer flex-col justify-start overflow-hidden rounded-xl border bg-ink-800 text-left shadow-[var(--shadow-card)] transition-all hover:-translate-y-0.5 hover:border-amber/50 hover:shadow-[0_14px_35px_rgb(0_0_0/0.35)] focus-visible:border-amber focus-visible:ring-2 focus-visible:ring-amber/40 focus-visible:outline-none",
         shot.status === "rendering" || shot.status === "checking"
           ? "border-amber/50 ring-4 ring-amber/10"
           : shot.status === "needs_review"
@@ -182,6 +192,11 @@ function ShotNode({ data }: NodeProps<Node<ShotData>>) {
         ) : (
           <div className={clsx("h-full w-full", shot.status === "rendering" ? "skeleton rounded-none" : "bg-ink-850")} />
         )}
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/25 group-focus-visible:bg-black/25">
+          <span className="inline-flex translate-y-1 items-center gap-1.5 rounded-lg border border-white/15 bg-black/75 px-2.5 py-1.5 text-[11px] font-medium text-white opacity-0 shadow-lg backdrop-blur transition-all group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100">
+            <Pencil className="size-3" /> Edit shot
+          </span>
+        </div>
         <div className="absolute inset-x-0 top-0 flex items-center justify-between p-2">
           <span className="rounded-md bg-black/60 px-1.5 py-0.5 font-mono text-[10.5px] text-white/90 backdrop-blur">
             {String(order).padStart(2, "0")} · {shot.id}

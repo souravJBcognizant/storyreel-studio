@@ -1,9 +1,12 @@
 """The production plan (characters, props, scenes, shots) and how a shot becomes an LTX prompt.
 
 A shot starts one of three ways:
-  fresh    — text only; scene openers render several takes and keep the most in-character one
+  fresh    — text only; used only when there is no earlier shot in the film
   continue — starts from the last frame of an earlier shot (`from`, default: the previous shot)
   anchor   — starts from a given still (`image`), e.g. the speaker's close-up keyframe
+
+When a shot after the first has no start image or explicit continuation, it automatically continues
+from the final frame of the immediately preceding shot.
 
 A line is delivered on camera (LTX performs it, then the speaker's cast voice is dubbed over it as a continuous line) or off camera (the picture shows someone listening, or no one, and the cast voice is laid over it).
 `character` is who is in the frame and `speaker` who says the line; on camera they are the same person.
@@ -111,10 +114,24 @@ def load_plan(path: Path) -> Plan:
         for cid, c in raw["characters"].items()
     }
     scenes = []
+    previous_shot_id: str | None = None
     for s in raw["scenes"]:
         scene = Scene(id=s["id"], setting=s["setting"], audio=s["audio"])
         for i, sh in enumerate(s["shots"]):
-            start = sh.get("start", "fresh")
+            image = resolve(sh["image"]) if sh.get("image") else None
+            requested_start = sh.get("start", "fresh")
+            if requested_start not in START_MODES:
+                start, from_shot = requested_start, None
+            elif image:
+                start, from_shot = "anchor", None
+            elif requested_start == "continue":
+                start, from_shot = "continue", sh.get("from") or previous_shot_id
+            elif requested_start == "anchor":
+                start, from_shot = "anchor", None
+            elif previous_shot_id:
+                start, from_shot = "continue", previous_shot_id
+            else:
+                start, from_shot = "fresh", None
             scene.shots.append(
                 Shot(
                     id=sh["id"],
@@ -124,9 +141,9 @@ def load_plan(path: Path) -> Plan:
                     camera=sh.get("camera", ""),
                     line=sh.get("line"),
                     seconds=sh.get("seconds"),
-                    image=resolve(sh["image"]) if sh.get("image") else None,
+                    image=image,
                     end_image=resolve(sh["end_image"]) if sh.get("end_image") else None,
-                    from_shot=sh.get("from") or (scene.shots[i - 1].id if start == "continue" and i > 0 else None),
+                    from_shot=from_shot,
                     character=sh.get("character"),
                     identity_check=sh.get("identity_check", True),
                     takes=sh.get("takes", 3 if (i == 0 and start == "fresh" and sh.get("character")) else 1),
@@ -135,6 +152,7 @@ def load_plan(path: Path) -> Plan:
                     speaker=(sh.get("speaker") or sh.get("character")) if sh.get("line") else None,
                 )
             )
+            previous_shot_id = sh["id"]
         scenes.append(scene)
     plan = Plan(
         title=raw["title"],

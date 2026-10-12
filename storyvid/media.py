@@ -103,6 +103,11 @@ def last_frame(video: Path, png: Path) -> Path:
     return png
 
 
+def first_frame(video: Path, png: Path) -> Path:
+    ffmpeg("-i", str(video), "-frames:v", "1", str(png))
+    return png
+
+
 def extract_audio(video: Path, wav: Path) -> Path:
     """Mono 24 kHz 16-bit — what the voice and speech models expect."""
     ffmpeg("-i", str(video), "-vn", "-ac", "1", "-ar", "24000", "-sample_fmt", "s16", str(wav))

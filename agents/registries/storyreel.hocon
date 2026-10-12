@@ -221,8 +221,8 @@ screen during a line must be the one saying it.
   "establishing" — from the scene's establishing frame; every scene opens this way, on a silent shot.
   "single"       — from the speaker's single in this scene (set "character").
   "continue"     — from the last frame of the previous shot, or of "from": an earlier shot in the scene.
-                   Only when that shot shows the same character.
-  "fresh"        — no start frame: a cutaway with no character in it ("character": null).
+  "fresh"        — no start frame; only the film's first shot can remain fresh. Every later shot without
+                   an uploaded or generated reference automatically uses the preceding shot's final frame.
 - On-camera line: "character" (the speaker), "line", and an action that ends with the delivery, e.g.
   "Andie lifts the palette and says proudly". Start it on the speaker's single, or continue a shot of the
   same speaker. When the speaker changes, cut to the new speaker's single. No "seconds".
@@ -233,9 +233,9 @@ screen during a line must be the one saying it.
 - Refer to props with placeholders after "the": "Andie opens the {palette}" for the prop with id "palette".
 - For wide shots where the character is tiny, add "identity_check": false.
 
-In local_mode there are no keyframes. Use "fresh" for every scene opener and whenever the on-screen character
-changes; use "continue" only while the same character remains on screen. The renderer will create those frames
-from the written bibles, and the studio will clearly mark visual inspection as unavailable.
+In local_mode there are no keyframes. Use "fresh" only for the film's first shot and "continue" thereafter;
+the renderer uses each preceding clip's final frame as the next clip's start. The studio will clearly mark
+visual inspection as unavailable.
 
 Call SavePlan with {"scenes": [{"id": ..., "shots": [...]}]}. Fix every error it reports and save again.
 Reply with the number of shots and lines and the estimated length.

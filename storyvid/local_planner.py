@@ -171,11 +171,11 @@ not screenplay dialogue, without shouting or whispering.""",
         if not preprod.load(self.pid, "plan") or screenplay_changed:
             plan_scenes = []
             for scene in play["scenes"]:
-                shots, previous_character = [], None
+                shots = []
                 for i, beat in enumerate(scene["beats"], 1):
                     character = beat.get("character")
                     line = beat.get("line")
-                    start = "continue" if shots and character and character == previous_character else "fresh"
+                    start = "continue" if shots else "fresh"
                     shot = {
                         "id": f"{scene['id'][:8]}_{i}", "start": start, "action": beat["action"],
                         "camera": ("Wide establishing shot. Static camera." if i == 1 else
@@ -188,7 +188,6 @@ not screenplay dialogue, without shouting or whispering.""",
                     else:
                         shot["seconds"] = 4
                     shots.append(shot)
-                    previous_character = character
                 plan_scenes.append({"id": scene["id"], "shots": shots})
             self._event("tool_start", "ShotPlanner", "Building a validated shot timeline")
             result = SavePlan().run(self.pid, {"scenes": plan_scenes})

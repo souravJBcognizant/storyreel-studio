@@ -53,11 +53,16 @@ export function ProductionPage() {
   const closeShot = () => setParams((prev) => (prev.delete("shot"), prev));
 
   const found = useMemo(() => {
-    for (const scene of p?.scenes ?? []) {
-      const shot = scene.shots.find((s) => s.id === shotId);
-      if (shot) return { scene, shot };
+    const allShots = (p?.scenes ?? []).flatMap((scene) => scene.shots.map((shot) => ({ scene, shot })));
+    const index = allShots.findIndex(({ shot }) => shot.id === shotId);
+    if (index >= 0) {
+      return {
+        ...allShots[index],
+        previousShot: allShots[index - 1]?.shot ?? null,
+        nextShot: allShots[index + 1]?.shot ?? null,
+      };
     }
-    return { scene: null, shot: null };
+    return { scene: null, shot: null, previousShot: null, nextShot: null };
   }, [p, shotId]);
 
   if (error) return <EmptyState icon={<Clapperboard className="size-5" />} title="Production not found" className="mt-24">{String(error)}</EmptyState>;
@@ -148,7 +153,15 @@ export function ProductionPage() {
         {tab === "files" && <FileBrowser root={filesRoot} />}
       </div>
 
-      <ShotDrawer shot={found.shot} scene={found.scene} productionId={id} busy={!!p.active_job} onClose={closeShot} />
+      <ShotDrawer
+        shot={found.shot}
+        scene={found.scene}
+        previousShot={found.previousShot}
+        nextShot={found.nextShot}
+        productionId={id}
+        busy={!!p.active_job}
+        onClose={closeShot}
+      />
     </>
   );
 }

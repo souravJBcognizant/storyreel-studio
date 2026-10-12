@@ -127,7 +127,10 @@ The first film downloads a few smaller models by itself (speech and voice, about
 
 ## Make your first film
 
-**1. Start a new production.** Add an opening picture and pick a length. Optionally add guide pictures in
+**1. Start a new production.** Choose **Start from scratch** to add an opening picture and pick a length,
+or **Start from an existing production** to make an independent copy of its story, references, plan, voices,
+takes and finished film. Copies can be edited or deleted without affecting the original, but duplicate the
+media on disk. When starting from scratch, optionally add guide pictures in
 story order and a final picture. Then choose either **I’ll write it** to provide the title and story yourself,
 or **Invent from images** and leave a simple direction such as “Generate an interesting story.” In that mode,
 the AI chooses the title, characters, plot and ending, using the pictures as chronological anchors when a
@@ -174,9 +177,15 @@ generates the phrases on either side separately so each can be aligned to that p
 sync without regenerating the video. Exact lip sync still depends on the original performance and
 timing recognition; choose original audio when the two deliveries differ too much to align naturally.
 
-To revise one shot, open it and describe the change under **Generate a new clip**. The studio renders
-new takes for that shot, selects the best result through the same checks, and rebuilds the MP4 without
-rendering the other shots again. For a speaking shot, **Regenerate overlay audio** accepts a delivery
+To revise one shot, click its card in **Shots and how they connect** (or open it from the Film or Shots tab),
+then use **Reference images** above the edit prompts to add, replace or remove
+the clip's start and end frames. These changes affect the next generated take while existing takes remain
+available. If a clip has no uploaded start reference, it automatically starts from the final frame of the
+preceding clip (except the first clip, which has no predecessor). Buttons below the references can also copy
+the previous clip's last frame or the next clip's first frame into those slots. Use **Re-render shot** for a
+new variation with the same direction, or describe a change under **Generate a new clip**. The studio renders new takes for that
+shot, selects the best result through the same checks, and rebuilds the MP4 without rendering the other
+shots again. For a speaking shot, **Regenerate overlay audio** accepts a delivery
 direction such as “quieter and more hesitant.” The scripted words stay fixed; the new delivery is
 aligned to the timing of the original performance before the film is rebuilt.
 

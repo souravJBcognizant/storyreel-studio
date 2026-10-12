@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { AudioLines, Check, Clapperboard, Crown, Mic, MicOff, X } from "lucide-react";
+import { AudioLines, Check, Clapperboard, Crown, ImagePlus, Link2, Mic, MicOff, RefreshCw, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Scene, Shot, Take } from "../lib/api";
 import { api, mediaUrl, thumbUrl } from "../lib/api";
@@ -9,15 +9,21 @@ import { duration } from "../lib/format";
 import { Button, ScoreChip, StatusPill } from "./ui";
 import { VideoPlayer } from "./VideoPlayer";
 
+const VARIATION_DIRECTION = "Create a new variation while preserving the planned action, framing, camera movement, and performance.";
+
 export function ShotDrawer({
   shot,
   scene,
+  previousShot,
+  nextShot,
   productionId,
   busy,
   onClose,
 }: {
   shot: Shot | null;
   scene: Scene | null;
+  previousShot: Shot | null;
+  nextShot: Shot | null;
   productionId: string;
   busy: boolean;
   onClose: () => void;
@@ -36,14 +42,24 @@ export function ShotDrawer({
     void qc.invalidateQueries({ queryKey: ["jobs"] });
   };
   const regenerateClip = useMutation({
-    mutationFn: () => api.regenerateShot(productionId, shot!.id, clipPrompt.trim()),
+    mutationFn: (prompt: string) => api.regenerateShot(productionId, shot!.id, prompt),
     onSuccess: refresh,
   });
   const regenerateAudio = useMutation({
     mutationFn: () => api.regenerateOverlay(productionId, shot!.id, audioPrompt.trim()),
     onSuccess: refresh,
   });
-  const editPending = regenerateClip.isPending || regenerateAudio.isPending;
+  const reference = useMutation({
+    mutationFn: ({ edge, file, neighbor }: { edge: "start" | "end"; file?: File; neighbor?: boolean }) =>
+      neighbor
+        ? api.useNeighborReference(productionId, shot!.id, edge)
+        : file
+          ? api.setShotReference(productionId, shot!.id, edge, file)
+          : api.removeShotReference(productionId, shot!.id, edge),
+    onSuccess: (p) => qc.setQueryData(["production", productionId], p),
+  });
+  const editPending = regenerateClip.isPending || regenerateAudio.isPending || reference.isPending;
+  const variationPending = regenerateClip.isPending && regenerateClip.variables === VARIATION_DIRECTION;
   useEffect(() => {
     setOriginal(shot?.audio_source === "original");
     setClipPrompt("");
@@ -51,6 +67,7 @@ export function ShotDrawer({
     choice.reset();
     regenerateClip.reset();
     regenerateAudio.reset();
+    reference.reset();
   }, [shot?.id, shot?.audio_source]);
   useEffect(() => setTakeIndex(shot?.chosen ?? (shot?.takes.length ? shot.takes.length - 1 : null)), [shot?.id, shot?.chosen, shot?.takes.length]);
   const take = shot && takeIndex != null ? shot.takes.find((t) => t.index === takeIndex) ?? null : null;
@@ -87,22 +104,6 @@ export function ShotDrawer({
                   <VideoPlayer key={src} src={src} poster={thumbUrl(take.path, 0.5, 960)} className="aspect-[3/2] w-full" autoPlay />
                 ) : (
                   <div className="skeleton aspect-[3/2] w-full" />
-                )}
-                {(shot.image || shot.end_image) && (
-                  <div className="mt-3 flex gap-3">
-                    {shot.image && (
-                      <div className="flex items-center gap-2 rounded-lg border border-white/[0.06] bg-ink-850 p-2 pr-3">
-                        <img src={thumbUrl(shot.image, 0, 160)} alt="Start reference" className="h-10 w-[60px] rounded object-cover" />
-                        <span className="text-[10.5px] text-fg-3">Start reference</span>
-                      </div>
-                    )}
-                    {shot.end_image && (
-                      <div className="flex items-center gap-2 rounded-lg border border-white/[0.06] bg-ink-850 p-2 pr-3">
-                        <img src={thumbUrl(shot.end_image, 0, 160)} alt="End reference" className="h-10 w-[60px] rounded object-cover" />
-                        <span className="text-[10.5px] text-fg-3">End reference</span>
-                      </div>
-                    )}
-                  </div>
                 )}
                 {take?.dub && (
                   <div className="mt-3 flex items-center gap-3">
@@ -163,10 +164,115 @@ export function ShotDrawer({
                 </div>
 
                 {shot.chosen != null && (
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-ink-850 px-3 py-2.5">
+                    <div>
+                      <p className="text-[12px] font-medium text-fg">Want another take without changing the direction?</p>
+                      <p className="mt-0.5 text-[10.5px] text-fg-4">Uses the same action and references with a new seed, then rebuilds the film. This may take a few minutes.</p>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      icon={<RefreshCw className="size-3.5" />}
+                      loading={variationPending}
+                      disabled={busy || editPending}
+                      onClick={() => regenerateClip.mutate(VARIATION_DIRECTION)}
+                    >
+                      Re-render shot
+                    </Button>
+                    {regenerateClip.error && regenerateClip.variables === VARIATION_DIRECTION && (
+                      <p role="alert" className="w-full text-[11.5px] text-bad">{regenerateClip.error.message}</p>
+                    )}
+                  </div>
+                )}
+
+                <div className="mt-5 rounded-xl border border-white/[0.08] bg-ink-850 p-3">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2 text-[12.5px] font-medium text-fg">
+                        <ImagePlus className="size-4 text-amber" /> Reference images
+                      </div>
+                      <p className="mt-1 text-[11.5px] leading-relaxed text-fg-3">
+                        Pin the first or last frame of the next generated clip. Changes save immediately; existing takes stay available.
+                      </p>
+                    </div>
+                    {reference.isPending && <span className="shrink-0 text-[11px] text-amber">Saving…</span>}
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    {(["start", "end"] as const).map((edge) => {
+                      const image = edge === "start" ? shot.image : shot.end_image;
+                      const inherited = edge === "start" && !image && shot.start === "continue";
+                      const neighbor = edge === "start" ? previousShot : nextShot;
+                      const neighborBoundary = edge === "start" ? "last" : "first";
+                      const canUseNeighbor = neighbor?.chosen != null;
+                      const saving = reference.isPending && reference.variables?.edge === edge;
+                      return (
+                        <div key={edge} className="flex min-w-0 flex-col gap-2">
+                          <div className="relative aspect-[3/2] overflow-hidden rounded-lg border border-white/[0.08] bg-ink-900">
+                            {image ? (
+                              <img src={thumbUrl(image, 0, 360)} alt={`${edge} reference`} className="h-full w-full object-cover" />
+                            ) : (
+                              <div className="flex h-full flex-col items-center justify-center text-fg-4">
+                                {inherited ? <Link2 className="size-5" /> : <ImagePlus className="size-5" />}
+                                <span className="mt-1 text-[10.5px]">{inherited ? "Previous shot's final frame" : `No ${edge} reference`}</span>
+                              </div>
+                            )}
+                            <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between bg-gradient-to-t from-black/80 to-transparent px-2.5 pt-8 pb-2">
+                              <span className="text-[10.5px] font-medium text-white capitalize">{edge} frame</span>
+                              <span className="inline-flex items-center gap-1 text-[10px] text-white/80">
+                                {image ? <RefreshCw className="size-3" /> : <ImagePlus className="size-3" />} {image ? "Replace" : "Add"}
+                              </span>
+                            </div>
+                            <label className={clsx("absolute inset-0 cursor-pointer", (busy || editPending) && "pointer-events-none opacity-50")}>
+                              <span className="sr-only">{image ? "Replace" : "Add"} {edge} reference</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="sr-only"
+                                disabled={busy || editPending}
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) reference.mutate({ edge, file });
+                                  e.target.value = "";
+                                }}
+                              />
+                            </label>
+                            {image && (
+                              <button
+                                type="button"
+                                title={`Remove ${edge} reference`}
+                                aria-label={`Remove ${edge} reference`}
+                                disabled={busy || editPending}
+                                onClick={() => reference.mutate({ edge })}
+                                className="absolute top-2 right-2 z-10 rounded-md bg-black/65 p-1.5 text-white transition-colors hover:bg-bad hover:text-white disabled:opacity-40"
+                              >
+                                <Trash2 className="size-3.5" />
+                              </button>
+                            )}
+                            {saving && <div className="absolute inset-0 flex items-center justify-center bg-black/55 text-[11px] text-white">Saving…</div>}
+                          </div>
+                          <button
+                            type="button"
+                            disabled={busy || editPending || !canUseNeighbor}
+                            title={canUseNeighbor ? `Copy ${neighbor!.id}'s ${neighborBoundary} frame` : `No rendered ${edge === "start" ? "previous" : "next"} shot`}
+                            onClick={() => reference.mutate({ edge, neighbor: true })}
+                            className="inline-flex min-h-8 items-center justify-center gap-1.5 rounded-lg border border-white/[0.08] bg-ink-900 px-2 py-1.5 text-center text-[10.5px] leading-tight text-fg-2 transition-colors hover:border-amber/30 hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <Link2 className="size-3 shrink-0 text-amber" />
+                            {neighbor ? `Use ${neighbor.id}'s ${neighborBoundary} frame` : `No ${edge === "start" ? "previous" : "next"} shot`}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-2 text-[10.5px] text-fg-4">Without an uploaded start reference, the previous shot's final frame is used automatically. Maximum 25 MB per image.</p>
+                  {reference.error && <p role="alert" className="mt-2 text-[11.5px] text-bad">{reference.error.message}</p>}
+                </div>
+
+                {shot.chosen != null && (
                   <div className="mt-6 grid gap-3 sm:grid-cols-2">
                     <form
                       className="rounded-xl border border-white/[0.08] bg-ink-850 p-3"
-                      onSubmit={(e) => { e.preventDefault(); if (clipPrompt.trim().length >= 3) regenerateClip.mutate(); }}
+                      onSubmit={(e) => { e.preventDefault(); if (clipPrompt.trim().length >= 3) regenerateClip.mutate(clipPrompt.trim()); }}
                     >
                       <div className="flex items-center gap-2 text-[12.5px] font-medium text-fg">
                         <Clapperboard className="size-4 text-amber" /> Generate a new clip
@@ -181,10 +287,10 @@ export function ShotDrawer({
                         placeholder="Make the gesture smaller and hold eye contact with the audience."
                         className="mt-3 w-full resize-y rounded-lg border border-white/10 bg-ink-900 px-3 py-2 text-[12px] leading-relaxed text-fg outline-none placeholder:text-fg-4 focus:border-amber/50"
                       />
-                      <Button type="submit" size="sm" className="mt-2 w-full" loading={regenerateClip.isPending} disabled={busy || editPending || clipPrompt.trim().length < 3}>
+                      <Button type="submit" size="sm" className="mt-2 w-full" loading={regenerateClip.isPending && !variationPending} disabled={busy || editPending || clipPrompt.trim().length < 3}>
                         Generate clip
                       </Button>
-                      {regenerateClip.error && <p role="alert" className="mt-2 text-[11.5px] text-bad">{regenerateClip.error.message}</p>}
+                      {regenerateClip.error && regenerateClip.variables !== VARIATION_DIRECTION && <p role="alert" className="mt-2 text-[11.5px] text-bad">{regenerateClip.error.message}</p>}
                     </form>
 
                     {shot.has_cast_audio && (
