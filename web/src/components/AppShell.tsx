@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Clapperboard, Cpu, FolderOpen, LayoutGrid, ListChecks, Plus, Settings } from "lucide-react";
+import { Clapperboard, Cpu, ExternalLink, FolderOpen, LayoutGrid, ListChecks, Plus, Settings } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, NavLink, Outlet } from "react-router";
 import { api, type Job } from "../lib/api";
@@ -55,12 +55,50 @@ export function AppShell() {
         </nav>
         <div className="mt-auto">
           <EngineCard active={active} />
+          <NeuroSanAttribution />
         </div>
       </aside>
       <main className="min-w-0 flex-1">
         <Outlet />
       </main>
     </div>
+  );
+}
+
+function NeuroSanAttribution() {
+  return (
+    <a
+      href="https://neuro-san.evolution.ml/"
+      target="_blank"
+      rel="noreferrer"
+      title="Learn more about Neuro-SAN"
+      className="group mt-3 flex items-center gap-2.5 rounded-lg border border-transparent px-2.5 py-2 text-fg-4 transition hover:border-white/[0.06] hover:bg-white/[0.025] hover:text-fg-2"
+    >
+      <NeuroSanMark />
+      <span className="min-w-0 leading-none">
+        <span className="block font-mono text-[8.5px] tracking-[0.13em] uppercase">Powered by</span>
+        <span className="mt-1 block text-[12px] font-semibold tracking-[0.01em] text-fg-2 transition group-hover:text-fg">Neuro-SAN</span>
+      </span>
+      <ExternalLink className="ml-auto size-3 opacity-0 transition group-hover:opacity-70" aria-hidden />
+    </a>
+  );
+}
+
+function NeuroSanMark() {
+  return (
+    <svg viewBox="0 0 28 28" className="size-7 shrink-0" aria-hidden>
+      <defs>
+        <linearGradient id="neuro-san-mark" x1="3" y1="3" x2="25" y2="25" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#6ee7e7" />
+          <stop offset="1" stopColor="#7987f5" />
+        </linearGradient>
+      </defs>
+      <path d="M8 9.5 14 6l6 3.5v7L14 20l-6-3.5v-7Z" fill="none" stroke="url(#neuro-san-mark)" strokeWidth="1.2" opacity=".42" />
+      <path d="m9.2 10.2 4.8 3.6 4.8-3.6M14 13.8v4.3" fill="none" stroke="url(#neuro-san-mark)" strokeWidth="1.15" />
+      <circle cx="9.2" cy="10.2" r="2.15" fill="#68d9df" />
+      <circle cx="18.8" cy="10.2" r="2.15" fill="#7c8cf5" />
+      <circle cx="14" cy="18.1" r="2.15" fill="#8ba8f2" />
+    </svg>
   );
 }
 
