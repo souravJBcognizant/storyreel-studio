@@ -205,9 +205,14 @@ Open the **Plan** tab to build or revise the timeline after the first plan has b
 - Click anywhere else on a shot to open its reference images, takes, audio options, and re-render controls.
   Shots can also be reordered within their scene or removed from the timeline.
 
-Timeline changes keep existing render files in the cache, mark the film as needing a new render, and repair
-continuation links where necessary. A newly added shot without its own start frame continues from the final
-frame of the shot immediately before it. Click **Re-render** afterwards; unchanged shots are reused.
+Timeline changes keep existing render files in the cache and repair continuation links where necessary.
+After deleting or reordering shots, open **Film** and click **Rebuild film**. This quickly assembles a new MP4
+from the remaining chosen takes; it does not generate those videos again, and deleted shots are left out.
+
+A newly inserted shot without its own start frame continues from the final frame of the shot immediately
+before it. New shots—and existing shots whose action, timing, camera or references you changed—need video
+generation: click **Re-render**. The cache reuses every unchanged shot, so only the missing or changed clips
+are generated before the film is assembled again.
 
 To remove an entire production, return to **Productions**, hover over its card, click the trash icon and
 confirm. This permanently deletes that production's local inputs, plans, takes and finished film. Imported
