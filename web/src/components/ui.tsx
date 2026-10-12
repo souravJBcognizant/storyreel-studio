@@ -106,6 +106,8 @@ export function StatusPill({ status, label, className }: { status: AnyStatus; la
 export const ENGINE: Record<Engine, { label: string; color: string; text: string }> = {
   claude: { label: "Claude", color: "var(--color-engine-claude)", text: "text-engine-claude" },
   openai: { label: "OpenAI", color: "var(--color-engine-openai)", text: "text-engine-openai" },
+  ollama: { label: "Ollama · local", color: "var(--color-engine-ollama)", text: "text-engine-ollama" },
+  local: { label: "Local", color: "var(--color-engine-local)", text: "text-engine-local" },
   ltx: { label: "LTX · local", color: "var(--color-engine-ltx)", text: "text-engine-ltx" },
   qwen: { label: "Voice generation · local", color: "var(--color-engine-qwen)", text: "text-engine-qwen" },
   ffmpeg: { label: "ffmpeg", color: "var(--color-engine-ffmpeg)", text: "text-engine-ffmpeg" },

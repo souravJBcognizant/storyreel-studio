@@ -6,34 +6,50 @@ import { api } from "../lib/api";
 
 export function SettingsPage() {
   const { data } = useQuery({ queryKey: ["settings"], queryFn: api.settings });
+  const providersReady = Boolean(data?.providers.language && data?.providers.vision && data?.providers.images);
   return (
     <>
       <PageHeader
         eyebrow="Settings"
         title="Providers & engine"
-        subtitle="Keys live in the .env file at the repository root and never leave the backend. This page only shows whether each one is set."
+        subtitle={data?.mode === "local" ? "Local mode is active. Visual inspection and generated keyframes are deliberately skipped." : "Full mode is active. Keys live in the repository's .env file and never leave the backend."}
       />
-      {data && (
+      {data && !providersReady && (
+        <div className="px-8 py-7">
+          <section className="card p-5 text-[13px] text-fg-2">Provider settings are reloading. Refresh once the API restart finishes.</section>
+        </div>
+      )}
+      {data && providersReady && (
         <div className="grid gap-5 px-8 py-7 lg:grid-cols-2">
           <Card
             icon={<KeyRound className="size-4" />}
-            title="Claude"
-            ok={data.providers.anthropic.configured}
+            title={data.providers.language.name}
+            ok={data.providers.language.configured}
             rows={[
-              ["Key", data.providers.anthropic.configured ? "set" : `missing — add ${data.providers.anthropic.env_var} to .env`],
-              ["Important tasks", data.providers.anthropic.model],
-              ["Routine steps", data.providers.anthropic.routine_model],
-              ["Used for", data.providers.anthropic.role],
+              ["Configuration", data.providers.language.configured ? "ready" : `missing — add ${data.providers.language.env_var} to .env`],
+              ["Important tasks", data.providers.language.model],
+              ["Routine steps", data.providers.language.routine_model],
+              ["Used for", data.providers.language.role],
             ]}
           />
           <Card
             icon={<KeyRound className="size-4" />}
-            title="OpenAI"
-            ok={data.providers.openai.configured}
+            title={`${data.providers.vision.name} vision`}
+            ok={data.mode === "local" || data.providers.vision.configured}
             rows={[
-              ["Key", data.providers.openai.configured ? "set" : `missing — add ${data.providers.openai.env_var} to .env`],
-              ["Image model", data.providers.openai.model ?? "set OPENAI_IMAGE_MODEL in .env"],
-              ["Used for", data.providers.openai.role],
+              ["Configuration", data.providers.vision.configured ? "ready" : data.mode === "local" ? "unavailable in local mode" : `missing — add ${data.providers.vision.env_var} to .env`],
+              ["Vision model", data.providers.vision.model ?? "not configured"],
+              ["Used for", data.providers.vision.role],
+            ]}
+          />
+          <Card
+            icon={<KeyRound className="size-4" />}
+            title={data.providers.images.name}
+            ok={data.mode === "local" || data.providers.images.configured}
+            rows={[
+              ["Configuration", data.providers.images.configured ? "ready" : data.mode === "local" ? "unavailable in local mode" : `missing — add ${data.providers.images.env_var} to .env`],
+              ["Image model", data.providers.images.model ?? "not configured"],
+              ["Used for", data.providers.images.role],
             ]}
           />
           <Card

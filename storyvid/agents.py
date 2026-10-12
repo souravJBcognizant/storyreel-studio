@@ -23,15 +23,34 @@ sys.path.insert(0, str(PROJECT))
 os.environ.setdefault("AGENT_MANIFEST_FILE", "agents/registries/manifest.hocon")
 os.environ.setdefault("AGENT_TOOL_PATH", "agents.coded_tools")  # a module path; a file path needs PYTHONPATH set
 
+# neuro-san infers Ollama from an Ollama base URL and otherwise infers the cloud provider from the
+# model name. These neutral variables let one HOCON network support both without changing its defaults.
+if os.environ.get("LLM_PROVIDER", "anthropic").strip().lower() == "ollama":
+    if not os.environ.get("OLLAMA_MODEL", "").strip():
+        raise RuntimeError("LLM_PROVIDER=ollama needs OLLAMA_MODEL in .env")
+    os.environ["AGENT_LLM_MODEL"] = os.environ["OLLAMA_MODEL"]
+    os.environ["AGENT_LLM_ROUTINE_MODEL"] = os.environ["OLLAMA_MODEL"]
+    os.environ["AGENT_LLM_BASE_URL"] = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    # Custom Ollama tags are not present in neuro-san's built-in model catalogue. Naming the
+    # implementation explicitly lets any locally installed tool-capable model be used.
+    os.environ["AGENT_LLM_CLASS"] = "ollama"
+else:
+    os.environ["AGENT_LLM_MODEL"] = os.environ.get("CLAUDE_MODEL", "claude-opus-5")
+    os.environ["AGENT_LLM_ROUTINE_MODEL"] = os.environ.get("CLAUDE_MODEL_ROUTINE", "claude-sonnet-5")
+
 from neuro_san.client.agent_session_factory import AgentSessionFactory  # noqa: E402
 from neuro_san.client.streaming_input_processor import StreamingInputProcessor  # noqa: E402
 
 from . import preprod  # noqa: E402
 
 NETWORK = "storyreel"
-BRIEF = (
+FULL_BRIEF = (
     "Run pre-production for this film: analyse the story and first frame, write the screenplay, cast the "
     "voices, make the reference sheets and each scene's coverage keyframes, and save a validated shot plan."
+)
+LOCAL_BRIEF = (
+    "Run pre-production in local mode: analyse only the written story, write the screenplay, cast the voices, "
+    "skip all frame inspection and image generation, and save a text-driven shot plan."
 )
 
 
@@ -99,11 +118,19 @@ def run_preprod(pid: str) -> str:
             f.write(json.dumps({"t": round(time.time(), 3), "type": event, **data}, ensure_ascii=False) + "\n")
 
     emit("run_started", network=NETWORK)
+    if os.environ.get("LOCAL_MODE", "").strip().lower() in ("1", "true", "yes", "on"):
+        from .local_planner import run_local_preprod
+
+        answer = run_local_preprod(pid, emit)
+        (preprod.folder(pid) / "director_summary.md").write_text(answer)
+        emit("run_finished", summary=answer)
+        return answer
     session = AgentSessionFactory().create_session("direct", NETWORK)
     processor = StreamingInputProcessor(session=session)
     messages = processor.get_message_processor()
+    brief = LOCAL_BRIEF if os.environ.get("LOCAL_MODE", "").strip().lower() in ("1", "true", "yes", "on") else FULL_BRIEF
     request = processor.formulate_chat_request(
-        BRIEF, sly_data={"production_id": pid}, chat_filter={"chat_filter_type": "MAXIMAL"}
+        brief, sly_data={"production_id": pid}, chat_filter={"chat_filter_type": "MAXIMAL"}
     )
     for chat_response in session.streaming_chat(request):
         message = chat_response.get("response", {})
@@ -116,6 +143,9 @@ def run_preprod(pid: str) -> str:
                 print(f"{time.strftime('%H:%M:%S')} {trace['kind']:10s} {label}", flush=True)
     answer = messages.get_compiled_answer() or ""
     (preprod.folder(pid) / "director_summary.md").write_text(answer)
+    missing = [name for name in ("cast", "screenplay", "plan") if not preprod.load(pid, name)]
+    if missing:
+        raise RuntimeError(f"agents finished without saving: {', '.join(missing)}. {answer[:500]}")
     emit("run_finished", summary=answer[:6000])
     return answer
 

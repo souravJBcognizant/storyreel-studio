@@ -8,7 +8,7 @@ export type StageStatus =
   | "done"
   | "skipped"
   | "failed";
-export type Engine = "claude" | "openai" | "ltx" | "qwen" | "ffmpeg" | "user";
+export type Engine = "claude" | "openai" | "ollama" | "local" | "ltx" | "qwen" | "ffmpeg" | "user";
 export type JobStatus = "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
 export type ShotStatus = "pending" | "rendering" | "checking" | "done" | "needs_review";
 
@@ -89,6 +89,7 @@ export interface Shot {
   start: "fresh" | "continue" | "anchor";
   from: string | null;
   image: string | null;
+  end_image: string | null;
   character: string | null;
   line: string | null;
   /** Who says the line; the character in frame unless it is delivered off camera. */
@@ -150,6 +151,7 @@ export interface ProductionSummary {
   target_seconds: number;
   steps: Record<string, StageStatus>;
   first_frame: string | null;
+  reference_images: { role: "opening" | "guide" | "ending"; name: string; path: string }[];
   poster: string | null;
   film_seconds: number | null;
   shots_done: number;
@@ -162,7 +164,9 @@ export interface AgentNetwork {
   name: string;
   front_man: string;
   agents: { name: string; description: string; model: string; tools: string[]; max_seconds: number | null }[];
-  tools: { name: string; description: string; engine: "claude" | "openai" | "local" }[];
+  tools: { name: string; description: string; engine: "claude" | "openai" | "ollama" | "local" }[];
+  llm_provider: "anthropic" | "ollama";
+  local_mode: boolean;
   image_model: string | null;
 }
 
@@ -298,9 +302,11 @@ export interface FileRoot {
 }
 
 export interface Settings {
+  mode: "full" | "local";
   providers: {
-    anthropic: { configured: boolean; env_var: string; model: string; routine_model: string; role: string };
-    openai: { configured: boolean; env_var: string; model: string | null; role: string };
+    language: { name: string; provider: string; configured: boolean; env_var: string; model: string; routine_model: string; role: string };
+    vision: { name: string; provider: string; configured: boolean; env_var: string; model: string | null; role: string };
+    images: { name: string; provider: string; configured: boolean; env_var: string; model: string | null; role: string };
   };
   engine: {
     name: string;
@@ -351,6 +357,14 @@ export const api = {
   createProduction: (form: FormData) =>
     request<Production>("/api/productions", { method: "POST", body: form }),
   deleteProduction: (id: string) => request<{ deleted: string }>(`/api/productions/${id}`, { method: "DELETE" }),
+  deleteShot: (id: string, shot: string) =>
+    request<Production>(`/api/productions/${id}/shots/${shot}`, { method: "DELETE" }),
+  reorderShots: (id: string, scene: string, shotIds: string[]) =>
+    request<Production>(`/api/productions/${id}/scenes/${scene}/shots/order`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ shot_ids: shotIds }),
+    }),
   startRender: (id: string) => request<Job>(`/api/productions/${id}/jobs?kind=render`, { method: "POST" }),
   rebuildFilm: (id: string) => request<Job>(`/api/productions/${id}/jobs?kind=export`, { method: "POST" }),
   chooseAudio: (id: string, shot: string, source: "cast" | "original") =>

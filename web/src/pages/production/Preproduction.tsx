@@ -25,6 +25,7 @@ export function NextStep({ p }: { p: Production }) {
   const job = p.active_job;
   const steps = p.steps;
   const error = start.error?.message ?? approve.error?.message;
+  const localMode = p.stages.find((stage) => stage.key === "analysis")?.engine === "ollama";
 
   let body: ReactNode = null;
   if (job && job.kind === "preprod") {
@@ -34,7 +35,7 @@ export function NextStep({ p }: { p: Production }) {
         {a?.last_text && <p className="mt-2 line-clamp-3 text-[12.5px] leading-relaxed text-fg-3">“{a.last_text}”</p>}
         <p className="mt-2 text-[11.5px] text-fg-4">
           {a?.tool ? `Using ${a.tool} · ` : ""}
-          {a ? `started ${ago(a.started)}${a.cost ? ` · Claude $${a.cost.toFixed(2)} so far` : ""}` : "Claude plans; OpenAI draws the sheets and keyframes."} You can leave this page — it keeps going.
+          {a ? `started ${ago(a.started)}${a.cost ? ` · model cost $${a.cost.toFixed(2)} so far` : ""}` : "The configured agents are planning the production."} You can leave this page — it keeps going.
         </p>
         <Link to={`/p/${p.id}?tab=agents`} className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-amber/30 bg-amber/10 px-3 py-1.5 text-[12.5px] font-medium text-amber hover:bg-amber/15">
           <Bot className="size-3.5" /> Watch the agents work
@@ -60,8 +61,10 @@ export function NextStep({ p }: { p: Production }) {
     body = (
       <Callout tone="action" icon={<Wand2 className="size-4" />} eyebrow="Next step" title="Plan the film with the agents">
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-fg-3">
-          The Director's team reads your story and first frame, writes the screenplay, draws consistent character, prop and scene
-          frames, and builds the shot plan. About 10–20 minutes; you approve the result before anything renders.
+          {localMode
+            ? "The local Director's team reads your story, writes the screenplay, casts voices and builds a text-driven shot plan. Your uploaded reference frames are applied directly to the timeline. Visual inspection and generated keyframes stay unavailable."
+            : "The Director's team reads your story and reference frames, writes the screenplay, draws consistent character, prop and scene frames, and builds the shot plan."}
+          {" "}About 10–20 minutes; you approve the result before anything renders.
         </p>
         <Button variant="primary" className="mt-4" icon={<Sparkles className="size-4" />} loading={start.isPending} onClick={() => start.mutate("preprod")}>
           Plan with agents
@@ -69,14 +72,15 @@ export function NextStep({ p }: { p: Production }) {
       </Callout>
     );
   } else if (steps.plan === "awaiting_approval" || steps.keyframes === "awaiting_approval") {
+    const waiting = (["plan", "keyframes"] as const).filter((stage) => steps[stage] === "awaiting_approval");
     body = (
-      <Callout tone="approve" icon={<Check className="size-4" />} eyebrow="Your approval" title="Review the plan and the scene keyframes">
+      <Callout tone="approve" icon={<Check className="size-4" />} eyebrow="Your approval" title={waiting.includes("keyframes") ? "Review the plan and the scene keyframes" : "Review the plan"}>
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-fg-3">
-          Check the screenplay in the Plan tab and the keyframes below: these frames open every scene, so the character's look is decided here.
+          {waiting.includes("keyframes") ? "Check the screenplay in the Plan tab and the keyframes below: these frames open every scene, so the character's look is decided here." : "Check the screenplay and text-driven shot plan in the Plan tab. Visual inspection and generated keyframes are unavailable in local mode."}
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button variant="primary" icon={<Check className="size-4" />} loading={approve.isPending} onClick={() => approve.mutate(["plan", "keyframes"])}>
-            Approve plan & keyframes
+          <Button variant="primary" icon={<Check className="size-4" />} loading={approve.isPending} onClick={() => approve.mutate(waiting)}>
+            {waiting.includes("keyframes") ? "Approve plan & keyframes" : "Approve plan"}
           </Button>
           {p.can_plan && (
             <Button icon={<RotateCcw className="size-4" />} loading={start.isPending} onClick={() => start.mutate("preprod")}>

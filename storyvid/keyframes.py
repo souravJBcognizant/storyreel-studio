@@ -1,4 +1,4 @@
-"""Consistent scenes: keyframes made with OpenAI image editing, then animated by LTX.
+"""Consistent scenes: keyframes made with an image API, then animated by LTX.
 
 Every call sends reference images — the first frame, the characters' turnaround sheets and the prop
 sheets — so each keyframe keeps the same people, props and look. Each scene gets coverage: an
@@ -34,8 +34,25 @@ class ImageResult:
 
 class KeyframeArtist:
     def __init__(self, model: str | None = None, quality: str = "high"):
-        self.client = openai.OpenAI()
-        self.model = model or os.environ.get("OPENAI_IMAGE_MODEL") or "gpt-image-2.5-sunburst"
+        provider = os.environ.get("IMAGE_PROVIDER", "openai").strip().lower()
+        if provider == "local":
+            base_url = os.environ.get("LOCAL_IMAGE_BASE_URL", "").strip()
+            local_model = os.environ.get("LOCAL_IMAGE_MODEL", "").strip()
+            if not base_url or not local_model:
+                raise RuntimeError(
+                    "IMAGE_PROVIDER=local needs LOCAL_IMAGE_BASE_URL and LOCAL_IMAGE_MODEL. "
+                    "Ollama text models do not implement image generation."
+                )
+            self.client = openai.OpenAI(
+                base_url=base_url,
+                api_key=os.environ.get("LOCAL_IMAGE_API_KEY", "local"),
+            )
+            self.model = model or local_model
+        elif provider == "openai":
+            self.client = openai.OpenAI()
+            self.model = model or os.environ.get("OPENAI_IMAGE_MODEL") or "gpt-image-2.5-sunburst"
+        else:
+            raise RuntimeError(f"Unsupported IMAGE_PROVIDER={provider!r}; use 'openai' or 'local'")
         self.quality = quality
         self._fidelity_ok = True  # flips off if the model rejects input_fidelity
 

@@ -33,6 +33,10 @@ LINE_TIMING = "voice"  # sized to the cast voice: 26% less render time than LTX'
 START_MODES = ("establishing", "single", "continue", "fresh")
 
 
+def _local_mode() -> bool:
+    return os.environ.get("LOCAL_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 class StoryTool(CodedTool):
     """Shared plumbing: production id from sly_data, JSON in and out, errors returned not raised."""
 
@@ -78,6 +82,14 @@ class ReadProduction(StoryTool):
             "title": prod["title"],
             "story": prod["story"],
             "target_seconds": prod["target_seconds"],
+            "reference_images": [
+                {"role": ref["role"], "name": ref.get("name"), "path": ref["path"]}
+                for ref in prod.get("reference_images", [
+                    {"role": "opening", "name": Path(prod["first_frame"]).name, "path": prod["first_frame"]}
+                ])
+            ],
+            "local_mode": _local_mode(),
+            "unavailable": ["first-frame inspection", "reference sheets", "keyframes", "visual QA"] if _local_mode() else [],
             "already_made": {name: preprod.load(pid, name) is not None for name in ("cast", "screenplay", "voices", "keyframes", "plan")},
         }
 
@@ -146,9 +158,15 @@ class SaveScreenplay(StoryTool):
         cast = preprod.load(pid, "cast") or {}
         known = {c["id"] for c in cast.get("characters", [])}
         problems, warnings = [], []
+        scene_ids = [scene.id for scene in play.scenes]
+        if not 1 <= len(scene_ids) <= 4:
+            problems.append(f"use 1-4 scenes, not {len(scene_ids)}")
+        if len(set(scene_ids)) != len(scene_ids) or any(not re.fullmatch(r"[a-z][a-z0-9_]*", sid) for sid in scene_ids):
+            problems.append("scene ids must be unique lowercase slugs")
+        lines: list[str] = []
         for scene in play.scenes:
             if scene.beats and scene.beats[0].line:
-                warnings.append(f"{scene.id}: opens on a line; open each scene on a silent establishing beat (its sound becomes the scene's ambience)")
+                problems.append(f"{scene.id}: opens on a line; open each scene on a silent establishing beat")
             for i, beat in enumerate(scene.beats):
                 if beat.line and not beat.character:
                     problems.append(f"{scene.id} beat {i + 1}: a line needs a speaking character")
@@ -158,14 +176,25 @@ class SaveScreenplay(StoryTool):
                     problems.append(f"{scene.id} beat {i + 1}: line is {len(beat.line.split())} words; keep lines to {MAX_LINE_WORDS} or fewer (split it into two beats)")
                 if beat.delivery and SOFT.search(beat.delivery):
                     warnings.append(f"{scene.id} beat {i + 1}: '{beat.delivery}' — soft or whispered delivery is hard to read on the lips; prefer warm, clear delivery")
+                if beat.line:
+                    lines.append(beat.line.strip().lower())
+        repeated = sorted({line for line in lines if lines.count(line) > 2})
+        if repeated:
+            problems.append("do not repeat the same line across the film: " + ", ".join(repr(line) for line in repeated))
         if problems:
             return {"ok": False, "errors": problems}
         target = preprod.production(pid)["target_seconds"]
         estimate = SECONDS_PER_BEAT * sum(len(s.beats) for s in play.scenes)
-        if not 0.6 * target <= estimate <= 1.4 * target:
-            warnings.append(f"about {estimate:.0f} s of film for a {target} s target; adjust the number of beats")
+        if not 0.9 * target <= estimate <= 1.1 * target:
+            message = f"about {estimate:.0f} s of film for a {target} s target; adjust the number of beats"
+            (problems if _local_mode() else warnings).append(message)
+        if problems:
+            return {"ok": False, "errors": problems}
         preprod.save(pid, "screenplay", play)
         store.set_step(pid, "plan", "running")  # the shot plan follows once keyframes exist
+        if _local_mode():
+            store.set_step(pid, "sheets", "skipped")
+            store.set_step(pid, "keyframes", "skipped")
         return {"ok": True, "scenes": len(play.scenes), "beats": sum(len(s.beats) for s in play.scenes),
                 "speakers": _speakers(play.model_dump()), "estimated_seconds": estimate, "warnings": warnings}  # fmt: skip
 
@@ -244,6 +273,8 @@ class MakeReferenceSheets(StoryTool):
     """Every missing character and prop sheet, made in parallel."""
 
     def run(self, pid, args):
+        if _local_mode():
+            return {"ok": False, "unavailable": "reference sheets are disabled in local mode"}
         cast, state = preprod.load(pid, "cast"), _keyframes(pid)
         characters = [c["id"] for c in cast["characters"] if c["id"] not in state["sheets"]]
         props = [p for p in cast["props"] if p not in state["props"]]
@@ -285,6 +316,8 @@ class MakeKeyframes(StoryTool):
     """
 
     def run(self, pid, args):
+        if _local_mode():
+            return {"ok": False, "unavailable": "keyframes and visual review are disabled in local mode"}
         from storyvid.keyframes import fit_frame
 
         cast, state = preprod.load(pid, "cast"), _keyframes(pid)
@@ -399,12 +432,52 @@ def _coverage_missing(pid: str, state: dict) -> list[str]:
 # ------------------------------------------------------------------ the shot plan
 
 
+def _apply_reference_images(prod: dict, plan: dict, rel) -> list[str]:
+    """Pin uploaded images to ordered shot boundaries without asking a text-only planner to inspect them."""
+    refs = prod.get("reference_images")
+    if not refs:  # productions created before multi-reference support keep their existing plans unchanged
+        return []
+    shots = [shot for scene in plan["scenes"] for shot in scene["shots"]]
+    if not shots:
+        return ["the uploaded reference frames need at least one shot"]
+    opening = next((r for r in refs if r["role"] == "opening"), None)
+    ending = next((r for r in refs if r["role"] == "ending"), None)
+    guides = [r for r in refs if r["role"] == "guide"]
+    if opening:
+        shots[0].update(start="anchor", image=rel(opening["path"]))
+        shots[0].pop("from", None)
+    if ending:
+        shots[-1]["end_image"] = rel(ending["path"])
+
+    # Every shot has a start and an end. Reserve the first start and last end, then spread guide
+    # frames across the remaining boundaries in upload order. This lets one shot interpolate
+    # between two references and lets adjacent shots use references on either side of a cut.
+    slots = [(i, edge) for i in range(len(shots)) for edge in ("start", "end")
+             if not (i == 0 and edge == "start") and not (i == len(shots) - 1 and edge == "end")]
+    if len(guides) > len(slots):
+        return [f"{len(guides)} guide frames need at least {max(2, (len(guides) + 3) // 2)} shots; "
+                f"the current plan has {len(shots)}"]
+    used: set[int] = set()
+    for i, guide in enumerate(guides):
+        ideal = round((i + 1) * (len(slots) + 1) / (len(guides) + 1) - 1)
+        slot_i = min((n for n in range(len(slots)) if n not in used), key=lambda n: (abs(n - ideal), n))
+        used.add(slot_i)
+        shot_i, edge = slots[slot_i]
+        if edge == "start":
+            shots[shot_i].update(start="anchor", image=rel(guide["path"]))
+            shots[shot_i].pop("from", None)
+        else:
+            shots[shot_i]["end_image"] = rel(guide["path"])
+    return []
+
+
 class SavePlan(StoryTool):
     """Turns the planner's shot list into a storyvid plan and validates it exactly as the renderer will."""
 
     def run(self, pid, args):
         prod = preprod.production(pid)
         cast, play, kf = preprod.load(pid, "cast"), preprod.load(pid, "screenplay"), _keyframes(pid)
+        local = _local_mode()
         voices = preprod.load(pid, "voices") or {}
         plan_dir = preprod.folder(pid)
         rel = lambda p: os.path.relpath(preprod.PROJECT / p, plan_dir)  # noqa: E731
@@ -414,7 +487,7 @@ class SavePlan(StoryTool):
         for s in play["scenes"]:
             scene_kf = kf["scenes"].get(s["id"], {})
             establishing = _chosen(scene_kf)
-            if not establishing:
+            if not establishing and not local:
                 errors.append(f"scene {s['id']} has no chosen establishing frame yet")
                 continue
             shots = []
@@ -424,11 +497,15 @@ class SavePlan(StoryTool):
                     errors.append(f"{sh.get('id')}: start must be one of {START_MODES}")
                     continue
                 if i == 0 and start not in ("establishing", "single"):
-                    errors.append(f"{sh.get('id')}: a scene opens on its establishing frame or a speaker's single")
-                if start == "fresh" and sh.get("character"):
+                    if not local:
+                        errors.append(f"{sh.get('id')}: a scene opens on its establishing frame or a speaker's single")
+                if start == "fresh" and sh.get("character") and not local:
                     errors.append(f"{sh.get('id')}: a fresh shot has no start frame, so {sh['character']} would be drawn from "
                                   "words alone and look different; start on their single or continue a shot of them")  # fmt: skip
-                if start == "establishing":
+                if local and start in ("establishing", "single"):
+                    sh.update(start="fresh")
+                    sh.pop("image", None)
+                elif start == "establishing":
                     sh.update(start="anchor", image=rel(establishing["frame"]))
                 elif start == "single":
                     single = _chosen(scene_kf.get("singles", {}).get(sh.get("character")))
@@ -456,11 +533,14 @@ class SavePlan(StoryTool):
         plan = {"title": prod["title"], "fps": 24, "width": 768, "height": 512, "line_seconds": LINE_SECONDS, "line_timing": LINE_TIMING,
                 "style": cast["style"].rstrip(". "), "characters": characters,
                 "props": {k: _prop_phrase(v) for k, v in cast["props"].items()}, "scenes": scenes}  # fmt: skip
+        reference_errors = _apply_reference_images(prod, plan, rel)
+        if reference_errors:
+            return {"ok": False, "errors": reference_errors}
         with tempfile.NamedTemporaryFile("w", suffix=".json", dir=plan_dir, delete=False) as f:
             json.dump(plan, f, indent=2)
         try:
             parsed = load_plan(Path(f.name))
-            problems = speaker_problems(parsed) if parsed.dubbed else []
+            problems = speaker_problems(parsed) if parsed.dubbed and not local else []
             if not parsed.dubbed and any(s.line for s in parsed.shots()):
                 problems.append("every character with a line needs a cast voice (CastingDirector) before the plan can be saved")
         except Exception as exc:
@@ -473,8 +553,8 @@ class SavePlan(StoryTool):
         data = json.loads(prod_file.read_text())
         data["plan"] = f"productions/{pid}/preprod/plan.json"
         prod_file.write_text(json.dumps(data, indent=2))
-        for step in ("plan", "keyframes"):
-            store.set_step(pid, step, "awaiting_approval")
+        store.set_step(pid, "plan", "awaiting_approval")
+        store.set_step(pid, "keyframes", "skipped" if local else "awaiting_approval")
         shots = parsed.shots()
         seconds = sum(sh.seconds or SECONDS_PER_BEAT for sh in shots)
         return {"ok": True, "shots": len(shots), "lines": sum(1 for sh in shots if sh.line), "estimated_seconds": seconds}

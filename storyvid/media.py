@@ -47,7 +47,8 @@ class Renderer:
             ["git", "-C", str(runtime_dir), "rev-parse", "--short", "HEAD"], capture_output=True, text=True
         ).stdout.strip()
 
-    def cache_key(self, prompt: str, seed: int, frames: int | None, image: Path | None) -> str:
+    def cache_key(self, prompt: str, seed: int, frames: int | None, image: Path | None,
+                  end_image: Path | None = None) -> str:  # fmt: skip
         spec = {
             "prompt": prompt,
             "seed": seed,
@@ -57,10 +58,12 @@ class Renderer:
             "model": self.model_dir.name,
             "runtime": self.runtime_rev,
             "image": file_sha1(image) if image else None,
+            "end_image": file_sha1(end_image) if end_image else None,
         }
         return hashlib.sha1(json.dumps(spec, sort_keys=True).encode()).hexdigest()[:10]
 
-    def render(self, prompt: str, out: Path, seed: int, frames: int | None, image: Path | None) -> RenderResult:
+    def render(self, prompt: str, out: Path, seed: int, frames: int | None, image: Path | None,
+               end_image: Path | None = None) -> RenderResult:  # fmt: skip
         if out.exists():
             return RenderResult(out, 0.0, True)
         cmd = [
@@ -71,7 +74,9 @@ class Renderer:
         ]  # fmt: skip
         cmd += ["-f", str(frames)] if frames else ["--auto-duration", self.auto_duration]
         if image:
-            cmd += ["-i", str(image)]
+            cmd += ["-i", str(image), "0", "1.0"]
+        if end_image:
+            cmd += ["-i", str(end_image), "last", "1.0"]
         t0 = time.perf_counter()
         with open(out.with_suffix(".log"), "w") as log:
             proc = subprocess.run(cmd, cwd=self.project, stdout=log, stderr=subprocess.STDOUT)

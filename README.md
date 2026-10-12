@@ -1,12 +1,12 @@
 # Storyreel Studio
 
-Make a short film from **one picture and a story**, on your Mac.
+Make a short film from **a story and your pictures**, on your Mac.
 
 ![Your films in the studio](docs/images/productions.jpg)
 
 ## What it does
 
-1. You give it a **first frame** (one picture) and a **short story**.
+1. You give it an **opening frame** and a **short story**. You can also add up to six ordered guide frames and a final frame.
 2. AI agents **plan the film**: the characters, the screenplay, a voice for every character, a picture for every shot, and the shot list.
 3. You **check and approve** the plan, the pictures and the voices.
 4. Your Mac **makes the video** with LTX-2.5, checks every shot, redoes the bad ones, and edits the film.
@@ -17,7 +17,8 @@ The studio checks every shot: each character keeps the same voice everywhere, an
 
 - A Mac with Apple Silicon (M1 or newer). **64 GB of memory** is best.
 - About **100 GB of free disk space**.
-- An **Anthropic API key** (Claude) and an **OpenAI API key**.
+- For the default full mode: an **Anthropic API key** (Claude) and an **OpenAI API key**.
+- For reduced-capability local mode: [Ollama](https://ollama.com) and a tool-capable local language model.
 - A free **Hugging Face** account.
 
 ## Setup (one time)
@@ -64,7 +65,9 @@ cd ltx-2-mlx && git checkout bfa5755 && uv sync --all-extras && cd ..
    ```
    You can follow the progress in `models/download-ltx.log`.
 
-### Step 6. Add your API keys
+### Step 6. Choose full mode or local mode
+
+#### Full mode (default)
 
 ```bash
 cp .env.example .env
@@ -73,6 +76,44 @@ open -e .env
 
 Paste your keys after `ANTHROPIC_API_KEY=` and `OPENAI_API_KEY=`, then save the file.
 The `.env` file stays on your Mac. It is never uploaded to GitHub.
+
+Full mode uses the existing Claude and OpenAI defaults and includes first-frame inspection, reference
+sheets, generated coverage keyframes and visual speaker checks.
+
+#### Local mode (no model API keys)
+
+Local mode keeps project creation, story planning, screenplay and shot-plan generation, local voice
+casting, rendering and editing on the laptop. It deliberately skips features the installed text-only
+LLM cannot perform: first-frame inspection, reference-sheet and keyframe generation, and visual QA.
+Shots start from written character descriptions instead of generated keyframes, so visual continuity
+will usually be weaker than in full mode.
+
+Install and start Ollama, make sure your model appears in `ollama list`, then put this in `.env`:
+
+```dotenv
+LOCAL_MODE=true
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=hf.co/unsloth/Qwen3-4B-Instruct-2507-GGUF:UD-Q4_K_XL
+OLLAMA_TIMEOUT_SECONDS=600
+
+# Keep cloud credentials commented in local mode.
+# ANTHROPIC_API_KEY=your-existing-key
+# OPENAI_API_KEY=your-existing-key
+
+# This Qwen model is text-only; local mode marks these features unavailable.
+VISION_PROVIDER=ollama
+OLLAMA_VISION_MODEL=
+IMAGE_PROVIDER=local
+LOCAL_IMAGE_BASE_URL=
+LOCAL_IMAGE_MODEL=
+```
+
+The model name must exactly match `ollama list`. The example above is the Qwen model used by the
+original developer machine; use your own installed tag on another laptop.
+
+To return to the existing full workflow, set `LOCAL_MODE=false` (or remove it), remove the local
+provider overrides, and uncomment the two API keys. Cloud mode remains the code default.
 
 ### Step 7. Start the studio
 
@@ -86,11 +127,14 @@ The first film downloads a few smaller models by itself (speech and voice, about
 
 ## Make your first film
 
-**1. Start a new production.** Add a picture, a title and a story, and pick a length.
+**1. Start a new production.** Add an opening picture, a title and a story, and pick a length. Optionally add
+guide pictures in story order and a final picture. The renderer distributes the guides across the shot
+timeline and pins the final picture to the end of the last shot.
 
 ![New production](docs/images/new-production.jpg)
 
-**2. Click "Plan with agents".** This takes about 15 minutes. Open the **Agents** tab to watch them work.
+**2. Click "Plan with agents".** This takes about 15 minutes in full mode and can take longer with a
+small local model. Open the **Agents** tab to watch them work.
 
 ![The agents at work](docs/images/agents.jpg)
 
@@ -131,6 +175,17 @@ aligned to the timing of the original performance before the film is rebuilt.
 
 ![One shot and its checks](docs/images/shot.jpg)
 
+### Change the timeline
+
+Open the **Plan** tab to change the finished film's order. Each shot has controls to move it earlier or
+later within its scene, or remove it from the timeline. Reordering and removal keep existing render files
+in the cache, mark the film as needing a new render, and repair continuation links where necessary. Click
+**Re-render** afterwards; unchanged shots are reused.
+
+To remove an entire production, return to **Productions**, hover over its card, click the trash icon and
+confirm. This permanently deletes that production's local inputs, plans, takes and finished film. Imported
+test productions and productions with a running job cannot be deleted.
+
 ## How it works
 
 | Step | Done by | Runs on |
@@ -142,10 +197,19 @@ aligned to the timing of the original performance before the film is rebuilt.
 | Checks: the words, who is talking | Whisper and Claude | your Mac and Claude API |
 | Edit and sound | ffmpeg | your Mac |
 
+In local mode, Ollama/Qwen replaces Claude for the text-agent rows. Qwen3-TTS, LTX and ffmpeg are
+already local. The image and visual-inspection rows are marked **skipped**, not silently approximated;
+the renderer makes text-driven shots without generated keyframes. Images you upload are still used
+directly as opening, guide and final-frame constraints, even though the text-only model cannot inspect them.
+This is a genuinely laptop-only mode,
+but it is not feature-equivalent to the default full mode.
+
 ## If something goes wrong
 
 - **The model download says 403:** you have not accepted the license yet (Step 5.1).
 - **The Settings page says a key is missing:** check `.env`, then stop and start the studio again.
+- **Ollama local mode cannot connect:** run `ollama serve`, verify the exact tag with `ollama list`, then restart the studio.
+- **The local agent misses a step or emits a malformed tool call:** a 4B model is much less reliable than the default cloud models. Re-run planning, shorten the story, or switch back to full mode.
 - **A shot says "needs review":** the best take is still used in the film. Open the shot to see which check it failed and why.
 - **A render stopped half way:** click **Render film** (or **Re-render**) again. Shots that are already made are reused, so it carries on where it stopped.
 

@@ -16,35 +16,47 @@ from ..events import latest_run
 from ..dub import DUB_VERSION
 from ..edit import audio_source, load_choices, load_edit, save_choice
 from ..plan import load_plan
-from .config import CLAUDE_MODEL, CLAUDE_MODEL_ROUTINE, OPENAI_IMAGE_MODEL, PRODUCTIONS, PROJECT
+from .config import (
+    IMAGE_ENGINE,
+    IMAGE_MODEL,
+    LLM_ENGINE,
+    LLM_MODEL,
+    LLM_MODEL_ROUTINE,
+    LOCAL_MODE,
+    PRODUCTIONS,
+    PROJECT,
+    VISION_ENGINE,
+)
 from .files import media_duration, to_virtual
 
 FPS = 24
 
 # The full pipeline, in order. `checkpoint` stages wait for the user's approval.
 STAGES = [
-    {"key": "story", "label": "Story & first frame", "owner": "You", "engine": "user",
-     "detail": "Upload the opening frame and write the story"},
-    {"key": "analysis", "label": "Story analysis", "owner": "StoryAnalyst", "engine": "claude", "model": CLAUDE_MODEL,
-     "detail": "Reads the story and the first frame: characters, look, voice, tone"},
-    {"key": "plan", "label": "Screenplay & shots", "owner": "Screenwriter · ShotPlanner", "engine": "claude",
-     "model": CLAUDE_MODEL, "checkpoint": True, "detail": "Scenes, dialogue and a shot plan you approve"},
-    {"key": "sheets", "label": "Character & prop sheets", "owner": "KeyframeArtist", "engine": "openai",
-     "model": OPENAI_IMAGE_MODEL or "OpenAI image model", "detail": "Reference sheets that lock the look"},
-    {"key": "keyframes", "label": "Coverage keyframes", "owner": "KeyframeArtist", "engine": "openai",
-     "model": OPENAI_IMAGE_MODEL or "OpenAI image model", "checkpoint": True,
+    {"key": "story", "label": "Story & reference frames", "owner": "You", "engine": "user",
+     "detail": "Upload an opening frame, optional guide and final frames, and write the story"},
+    {"key": "analysis", "label": "Story analysis", "owner": "StoryAnalyst", "engine": LLM_ENGINE, "model": LLM_MODEL,
+     "detail": "Reads the written story: characters, look, voice and tone" if LOCAL_MODE else
+               "Reads the story and the first frame: characters, look, voice, tone"},
+    {"key": "plan", "label": "Screenplay & shots", "owner": "Screenwriter · ShotPlanner", "engine": LLM_ENGINE,
+     "model": LLM_MODEL, "checkpoint": True, "detail": "Scenes, dialogue and a shot plan you approve"},
+    {"key": "sheets", "label": "Character & prop sheets", "owner": "KeyframeArtist", "engine": IMAGE_ENGINE,
+     "model": IMAGE_MODEL or "Image model", "detail": "Reference sheets that lock the look"},
+    {"key": "keyframes", "label": "Coverage keyframes", "owner": "KeyframeArtist", "engine": IMAGE_ENGINE,
+     "model": IMAGE_MODEL or "Image model", "checkpoint": True,
      "detail": "Per scene: an establishing frame and a close-up of everyone who speaks, reviewed against the sheets"},
     {"key": "voice", "label": "Voice casting", "owner": "CastingDirector", "engine": "qwen",
      "model": "Qwen3-TTS VoiceDesign (local)", "checkpoint": True,
      "detail": "Each speaking character's voice, designed once; every line is spoken in it"},
     {"key": "render", "label": "Render & QA", "owner": "ProductionManager", "engine": "ltx",
      "model": "LTX-2.5 (local)",
-     "detail": "Every take checked: the words, who is talking (Claude), and the cast voice timed to the performance"},
+     "detail": "Every take checked locally for words and voice timing; visual QA is unavailable" if LOCAL_MODE else
+               f"Every take checked: the words, who is talking ({VISION_ENGINE}), and the cast voice timed to the performance"},
     {"key": "assemble", "label": "Edit", "owner": "Editor", "engine": "ffmpeg", "model": "ffmpeg",
      "detail": "Cut, fades, scene ambience under the voices, loudness"},
     {"key": "film", "label": "Film", "owner": "You", "engine": "user", "detail": "Watch, download, share"},
 ]
-ROUTINE_MODEL = CLAUDE_MODEL_ROUTINE
+ROUTINE_MODEL = LLM_MODEL_ROUTINE
 
 
 def slugify(title: str) -> str:
@@ -172,12 +184,27 @@ def ensure_imports() -> None:
     )
 
 
-def create(title: str, story: str, frame_name: str, frame_bytes: bytes, target_seconds: int) -> dict:
+def create(title: str, story: str, frame_name: str, frame_bytes: bytes, target_seconds: int,
+           guide_frames: list[tuple[str, bytes]] | None = None,
+           final_frame: tuple[str, bytes] | None = None) -> dict:  # fmt: skip
     pid = slugify(title)
     inputs = PRODUCTIONS / pid / "inputs"
     inputs.mkdir(parents=True, exist_ok=True)
     ext = Path(frame_name).suffix.lower() or ".png"
-    (inputs / f"first_frame{ext}").write_bytes(frame_bytes)
+    opening_path = inputs / f"first_frame{ext}"
+    opening_path.write_bytes(frame_bytes)
+    references = [{"role": "opening", "name": frame_name, "path": f"productions/{pid}/inputs/{opening_path.name}"}]
+    for i, (name, data) in enumerate(guide_frames or [], 1):
+        guide_ext = Path(name).suffix.lower() or ".png"
+        path = inputs / f"guide_{i:02d}{guide_ext}"
+        path.write_bytes(data)
+        references.append({"role": "guide", "name": name, "path": f"productions/{pid}/inputs/{path.name}"})
+    if final_frame:
+        name, data = final_frame
+        final_ext = Path(name).suffix.lower() or ".png"
+        path = inputs / f"final_frame{final_ext}"
+        path.write_bytes(data)
+        references.append({"role": "ending", "name": name, "path": f"productions/{pid}/inputs/{path.name}"})
     (inputs / "story.md").write_text(story)
     now = time.time()
     prod = {
@@ -187,7 +214,8 @@ def create(title: str, story: str, frame_name: str, frame_bytes: bytes, target_s
         "updated": now,
         "source": "Uploaded",
         "story": story,
-        "first_frame": f"productions/{pid}/inputs/first_frame{ext}",
+        "first_frame": f"productions/{pid}/inputs/{opening_path.name}",
+        "reference_images": references,
         "plan": None,
         "out": f"productions/{pid}/out",
         "target_seconds": target_seconds,
@@ -202,6 +230,80 @@ def delete(pid: str) -> None:
     if prod.get("source", "").startswith("Stage"):
         raise HTTPException(400, "imported test productions can't be deleted from the app")
     shutil.rmtree(PRODUCTIONS / pid)
+
+
+def _write_plan(pid: str, raw: dict) -> None:
+    """Validate and atomically replace a production plan after a timeline edit."""
+    prod = _read(pid)
+    plan_path = _path(prod.get("plan"))
+    if not plan_path:
+        raise HTTPException(409, "this production has no shot plan yet")
+    tmp = plan_path.with_suffix(".editing.json")
+    tmp.write_text(json.dumps(raw, indent=2))
+    try:
+        load_plan(tmp)
+    except Exception as exc:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(422, f"that timeline would make the plan invalid: {exc}") from exc
+    tmp.replace(plan_path)
+    prod["updated"] = time.time()
+    for step in ("render", "assemble", "film"):
+        prod["steps"][step] = "pending"
+    _write(prod)
+
+
+def _repair_continuations(raw: dict) -> None:
+    """A moved continuation follows the nearest earlier shot if its old source is now later or gone."""
+    seen: list[str] = []
+    for scene in raw["scenes"]:
+        for shot in scene["shots"]:
+            if shot.get("start") == "continue":
+                source = shot.get("from")
+                if not source or source not in seen:
+                    if seen:
+                        shot["from"] = seen[-1]
+                    else:
+                        shot["start"] = "fresh"
+                        shot.pop("from", None)
+            seen.append(shot["id"])
+
+
+def reorder_shots(pid: str, scene_id: str, shot_ids: list[str]) -> None:
+    prod = _read(pid)
+    plan_path = _path(prod.get("plan"))
+    if not plan_path:
+        raise HTTPException(409, "this production has no shot plan yet")
+    raw = json.loads(plan_path.read_text())
+    scene = next((s for s in raw["scenes"] if s["id"] == scene_id), None)
+    if not scene:
+        raise HTTPException(404, f"no scene {scene_id!r}")
+    current = [s["id"] for s in scene["shots"]]
+    if len(shot_ids) != len(set(shot_ids)) or set(shot_ids) != set(current):
+        raise HTTPException(422, "the new order must contain every shot in the scene exactly once")
+    by_id = {s["id"]: s for s in scene["shots"]}
+    scene["shots"] = [by_id[sid] for sid in shot_ids]
+    _repair_continuations(raw)
+    _write_plan(pid, raw)
+
+
+def delete_shot(pid: str, shot_id: str) -> None:
+    prod = _read(pid)
+    plan_path = _path(prod.get("plan"))
+    if not plan_path:
+        raise HTTPException(409, "this production has no shot plan yet")
+    raw = json.loads(plan_path.read_text())
+    found = False
+    for scene in raw["scenes"]:
+        before = len(scene["shots"])
+        scene["shots"] = [s for s in scene["shots"] if s["id"] != shot_id]
+        found = found or len(scene["shots"]) != before
+    if not found:
+        raise HTTPException(404, f"no shot {shot_id!r}")
+    raw["scenes"] = [scene for scene in raw["scenes"] if scene["shots"]]
+    if not raw["scenes"]:
+        raise HTTPException(422, "a production must keep at least one shot")
+    _repair_continuations(raw)
+    _write_plan(pid, raw)
 
 
 def all_ids() -> list[str]:
@@ -398,6 +500,12 @@ def summary(pid: str, jobs: list[dict]) -> dict:
     return {
         **{k: prod[k] for k in ("id", "title", "created", "updated", "source", "target_seconds", "steps")},
         "first_frame": to_virtual(_path(prod["first_frame"])),
+        "reference_images": [
+            {**ref, "path": to_virtual(_path(ref["path"]))}
+            for ref in prod.get("reference_images", [
+                {"role": "opening", "name": Path(prod["first_frame"]).name, "path": prod["first_frame"]}
+            ])
+        ],
         "poster": to_virtual(film) if film and film.exists() else None,
         "film_seconds": media_duration(film) if film and film.exists() else None,
         "shots_done": len(resolved),
@@ -436,6 +544,7 @@ def detail(pid: str, jobs: list[dict]) -> dict:
             shots.append({
                 "id": shot.id, "start": shot.start, "from": shot.from_shot,
                 "image": to_virtual(shot.image) if shot.image else None,
+                "end_image": to_virtual(shot.end_image) if shot.end_image else None,
                 "character": shot.character, "line": shot.line, "action": _action(plan, shot),
                 "speaker": shot.speaker, "delivery": shot.delivery,
                 "audio_source": audio_source(plan, shot, choices),

@@ -36,6 +36,8 @@
   /* One hue per engine, used in tags, graph edges and the stage rail. */
   --color-engine-claude: #e3895f;
   --color-engine-openai: #6fcaa3;
+  --color-engine-ollama: #79c7e3;
+  --color-engine-local: #81c995;
   --color-engine-ltx: #97a3f2;
   --color-engine-ffmpeg: #cdb57b;
   --color-engine-qwen: #d59ad8;

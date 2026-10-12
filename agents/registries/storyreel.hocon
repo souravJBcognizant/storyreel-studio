@@ -11,17 +11,22 @@
         "tags": ["storyreel", "video", "planning"]
     },
 
-    # Important reasoning: Claude Opus. Routine orchestration: Claude Sonnet. Both follow .env.
+    # Cloud defaults: Claude Opus for important reasoning and Sonnet for routine orchestration.
+    # storyvid.agents overlays these neutral variables when .env opts into Ollama.
     "important_llm": {
-        "class": "anthropic",
         "model_name": "claude-opus-5",
-        "model_name": ${?CLAUDE_MODEL},
+        "model_name": ${?AGENT_LLM_MODEL},
+        "class": ${?AGENT_LLM_CLASS},
+        "base_url": ${?AGENT_LLM_BASE_URL},
+        "reasoning": false,
         "max_tokens": 32000
     },
     "routine_llm": {
-        "class": "anthropic",
         "model_name": "claude-sonnet-5",
-        "model_name": ${?CLAUDE_MODEL_ROUTINE},
+        "model_name": ${?AGENT_LLM_ROUTINE_MODEL},
+        "class": ${?AGENT_LLM_CLASS},
+        "base_url": ${?AGENT_LLM_BASE_URL},
+        "reasoning": false,
         "max_tokens": 16000
     },
     "llm_config": ${important_llm},
@@ -57,11 +62,14 @@ Work strictly in this order, one specialist at a time, waiting for each to finis
    single (close-up) of every character who speaks in that scene.
 5. ShotPlanner — turns the screenplay into a validated shot plan on those keyframes.
 
+If the request says local mode, visual features are deliberately unavailable. In that mode use this shorter
+order: StoryAnalyst → Screenwriter → CastingDirector → ShotPlanner. Do not call KeyframeArtist at all.
+
 Pass each specialist a short request with anything earlier steps told you that matters.
 If a specialist reports a problem it could not fix, decide whether to ask it to retry with clearer
 direction (at most once), or stop and report the problem.
 
-When all five have succeeded, answer with a brief summary for the human producer: the characters and
+When every specialist required by the selected mode has succeeded, answer with a brief summary for the human producer: the characters and
 their voices, the scenes, how many shots and lines, and anything they should look at or listen to
 before approving.
 """,
@@ -77,9 +85,12 @@ before approving.
                 "parameters": ${agent_parameters}
             },
             "instructions": """
-Call ReadProduction, then DescribeFirstFrame.
+Call ReadProduction. If it reports local_mode false, call DescribeFirstFrame. If local_mode is true, do not call
+DescribeFirstFrame: infer only what the written story establishes and do not claim to have seen the uploaded image.
 
-Decide the cast: the characters visible in the first frame, described exactly as they appear there.
+Decide the cast: in full mode use the characters visible in the first frame, described exactly as they appear
+there. In local mode use only characters established by the written story and give them practical, internally
+consistent designs without implying that those designs came from the uploaded image.
 For each character write:
 - id: a lowercase slug of their name; name: how the film calls them.
 - bible: ONE sentence that starts with the style and then the character, in this pattern:
@@ -200,7 +211,7 @@ Reply with each scene's chosen frames and review scores, and any concerns.
                 "parameters": ${agent_parameters}
             },
             "instructions": """
-Call ReadCast, ReadScreenplay and ReadKeyframes, then plan the shots, scene by scene, like a film editor
+Call ReadProduction, ReadCast and ReadScreenplay. When local_mode is false, also call ReadKeyframes. Then plan the shots, scene by scene, like a film editor
 covering a dialogue scene. The video model makes whoever is on screen speak the line, so the person on
 screen during a line must be the one saying it.
 
@@ -222,10 +233,14 @@ screen during a line must be the one saying it.
 - Refer to props with placeholders after "the": "Andie opens the {palette}" for the prop with id "palette".
 - For wide shots where the character is tiny, add "identity_check": false.
 
+In local_mode there are no keyframes. Use "fresh" for every scene opener and whenever the on-screen character
+changes; use "continue" only while the same character remains on screen. The renderer will create those frames
+from the written bibles, and the studio will clearly mark visual inspection as unavailable.
+
 Call SavePlan with {"scenes": [{"id": ..., "shots": [...]}]}. Fix every error it reports and save again.
 Reply with the number of shots and lines and the estimated length.
 """,
-            "tools": ["ReadCast", "ReadScreenplay", "ReadKeyframes", "SavePlan"],
+            "tools": ["ReadProduction", "ReadCast", "ReadScreenplay", "ReadKeyframes", "SavePlan"],
             "max_execution_seconds": 900
         },
 

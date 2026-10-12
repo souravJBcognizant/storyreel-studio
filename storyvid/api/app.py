@@ -20,6 +20,7 @@ from .config import PROJECT, settings
 from .jobs import JobManager
 
 MAX_FRAME_BYTES = 25 * 1024 * 1024
+MAX_GUIDE_FRAMES = 6
 jobs = JobManager()
 
 
@@ -60,15 +61,26 @@ async def create_production(
     story: str = Form(...),
     target_seconds: int = Form(60),
     first_frame: UploadFile = File(...),
+    guide_frames: list[UploadFile] = File(default=[]),
+    final_frame: UploadFile | None = File(default=None),
 ):
     if not title.strip() or len(story.strip()) < 20:
         raise HTTPException(422, "a title and a story of at least a couple of sentences are needed")
-    if not (first_frame.content_type or "").startswith("image/"):
-        raise HTTPException(422, "the first frame must be an image")
-    data = await first_frame.read()
-    if len(data) > MAX_FRAME_BYTES:
-        raise HTTPException(413, "the first frame is larger than 25 MB")
-    prod = store.create(title, story, first_frame.filename or "first_frame.png", data, target_seconds)
+    if len(guide_frames) > MAX_GUIDE_FRAMES:
+        raise HTTPException(422, f"add at most {MAX_GUIDE_FRAMES} guide frames")
+
+    async def read_image(upload: UploadFile, label: str) -> tuple[str, bytes]:
+        if not (upload.content_type or "").startswith("image/"):
+            raise HTTPException(422, f"the {label} must be an image")
+        data = await upload.read()
+        if len(data) > MAX_FRAME_BYTES:
+            raise HTTPException(413, f"the {label} is larger than 25 MB")
+        return upload.filename or f"{label.replace(' ', '_')}.png", data
+
+    opening = await read_image(first_frame, "opening frame")
+    guides = [await read_image(upload, f"guide frame {i}") for i, upload in enumerate(guide_frames, 1)]
+    ending = await read_image(final_frame, "final frame") if final_frame else None
+    prod = store.create(title, story, *opening, target_seconds, guide_frames=guides, final_frame=ending)
     return store.detail(prod["id"], jobs.all())
 
 
@@ -108,6 +120,29 @@ def choose_audio(pid: str, sid: str, body: AudioChoice):
 
 class EditPrompt(BaseModel):
     prompt: str
+
+
+class ShotOrder(BaseModel):
+    shot_ids: list[str]
+
+
+def ensure_idle(pid: str) -> None:
+    if any(j["production"] == pid and j["status"] in ("queued", "running", "cancelling") for j in jobs.all()):
+        raise HTTPException(409, "wait for the current job to finish before editing the timeline")
+
+
+@app.put("/api/productions/{pid}/scenes/{scene_id}/shots/order")
+def reorder_shots(pid: str, scene_id: str, body: ShotOrder):
+    ensure_idle(pid)
+    store.reorder_shots(pid, scene_id, body.shot_ids)
+    return store.detail(pid, jobs.all())
+
+
+@app.delete("/api/productions/{pid}/shots/{sid}")
+def delete_shot(pid: str, sid: str):
+    ensure_idle(pid)
+    store.delete_shot(pid, sid)
+    return store.detail(pid, jobs.all())
 
 
 @app.post("/api/productions/{pid}/shots/{sid}/regenerate")

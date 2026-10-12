@@ -1,5 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
-import { Clapperboard, Film, Play, Plus } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Clapperboard, Film, Play, Plus, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 import { PageHeader } from "../components/AppShell";
 import { Button, EmptyState, ProgressBar, StatusPill } from "../components/ui";
@@ -24,13 +24,21 @@ export function productionState(p: ProductionSummary) {
 
 export function ProductionsPage() {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ["productions"], queryFn: api.productions, refetchInterval: 4000 });
+  const remove = useMutation({
+    mutationFn: api.deleteProduction,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["productions"] }),
+  });
+  const removeProduction = (p: ProductionSummary) => {
+    if (window.confirm(`Delete “${p.title}” and all of its local files? This cannot be undone.`)) remove.mutate(p.id);
+  };
   return (
     <>
       <PageHeader
         eyebrow="Studio"
         title="Productions"
-        subtitle="Every film starts with a first frame and a story. The agents plan it, you approve the key moments, and the render engine on this Mac makes it."
+        subtitle="Every film starts with an opening frame and a story. Add optional guide and final frames, approve the plan, and the render engine on this Mac makes it."
         actions={
           <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => navigate("/new")}>
             New production
@@ -56,14 +64,14 @@ export function ProductionsPage() {
                 </Button>
               }
             >
-              Upload an opening frame, write the story, and the studio takes it from there.
+              Upload an opening frame and optional references, write the story, and the studio takes it from there.
             </EmptyState>
           </div>
         )}
         {data && data.length > 0 && (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-5">
             {data.map((p, i) => (
-              <ProductionCard key={p.id} p={p} index={i} />
+              <ProductionCard key={p.id} p={p} index={i} onDelete={() => removeProduction(p)} deleting={remove.isPending && remove.variables === p.id} />
             ))}
             <Link
               to="/new"
@@ -73,7 +81,7 @@ export function ProductionsPage() {
                 <Plus className="size-5" />
               </span>
               <span className="mt-3 text-[13px] font-medium">New production</span>
-              <span className="mt-1 text-[11.5px] text-fg-4">First frame + story</span>
+              <span className="mt-1 text-[11.5px] text-fg-4">Reference frames + story</span>
             </Link>
           </div>
         )}
@@ -82,15 +90,12 @@ export function ProductionsPage() {
   );
 }
 
-function ProductionCard({ p, index }: { p: ProductionSummary; index: number }) {
+function ProductionCard({ p, index, onDelete, deleting }: { p: ProductionSummary; index: number; onDelete: () => void; deleting: boolean }) {
   const state = productionState(p);
   const poster = p.poster ? thumbUrl(p.poster, 13, 720) : p.first_frame ? thumbUrl(p.first_frame, 0, 720) : null;
   return (
-    <Link
-      to={`/p/${p.id}`}
-      className="group card animate-rise overflow-hidden transition-all hover:-translate-y-0.5 hover:border-white/[0.12]"
-      style={{ animationDelay: `${index * 50}ms` }}
-    >
+    <article className="group card relative animate-rise overflow-hidden transition-all hover:-translate-y-0.5 hover:border-white/[0.12]" style={{ animationDelay: `${index * 50}ms` }}>
+      <Link to={`/p/${p.id}`} className="block">
       <div className="relative aspect-[16/10] overflow-hidden bg-ink-900">
         {poster ? (
           <img src={poster} alt="" className="h-full w-full object-cover transition-transform duration-700 group-hover:scale-[1.03]" />
@@ -128,6 +133,19 @@ function ProductionCard({ p, index }: { p: ProductionSummary; index: number }) {
           <ProgressBar value={pct(p.progress.shots_done, p.progress.shots_total)} live />
         </div>
       )}
-    </Link>
+      </Link>
+      {!p.source.startsWith("Stage") && !p.active_job && (
+        <button
+          type="button"
+          aria-label={`Delete ${p.title}`}
+          title="Delete production"
+          disabled={deleting}
+          onClick={onDelete}
+          className="absolute right-3 bottom-2.5 rounded-md p-1.5 text-fg-4 opacity-0 transition-all hover:bg-bad/10 hover:text-bad group-hover:opacity-100 focus:opacity-100 disabled:opacity-40"
+        >
+          <Trash2 className="size-3.5" />
+        </button>
+      )}
+    </article>
   );
 }

@@ -42,6 +42,7 @@ class Shot:
     line: str | None = None
     seconds: float | None = None  # silent shots; lines let the DurationHead decide
     image: Path | None = None
+    end_image: Path | None = None  # optional user reference pinned to the last frame
     from_shot: str | None = None
     character: str | None = None  # None: no character in frame (prop or landscape shot)
     identity_check: bool = True  # off when the character is too small to judge
@@ -124,6 +125,7 @@ def load_plan(path: Path) -> Plan:
                     line=sh.get("line"),
                     seconds=sh.get("seconds"),
                     image=resolve(sh["image"]) if sh.get("image") else None,
+                    end_image=resolve(sh["end_image"]) if sh.get("end_image") else None,
                     from_shot=sh.get("from") or (scene.shots[i - 1].id if start == "continue" and i > 0 else None),
                     character=sh.get("character"),
                     identity_check=sh.get("identity_check", True),
@@ -165,6 +167,8 @@ def _validate(plan: Plan) -> None:
             raise ValueError(f"{shot.id}: continues from {shot.from_shot!r}, which is not an earlier shot")
         if shot.start == "anchor" and not (shot.image and shot.image.exists()):
             raise ValueError(f"{shot.id}: anchor image {shot.image} not found")
+        if shot.end_image and not shot.end_image.exists():
+            raise ValueError(f"{shot.id}: end image {shot.end_image} not found")
         if shot.character and shot.character not in plan.characters:
             raise ValueError(f"{shot.id}: unknown character {shot.character!r}")
         if shot.line and not shot.speaker:

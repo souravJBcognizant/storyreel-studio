@@ -103,6 +103,7 @@ class ShotResult:
     takes: list[Take]
     chosen: int
     needs_review: bool
+    end_image: str | None = None
 
 
 def seed_for(shot_id: str, take: int) -> int:
@@ -112,6 +113,7 @@ def seed_for(shot_id: str, take: int) -> int:
 class Director:
     def __init__(self, plan: Plan, out: Path, *, assemble_only: bool = False):
         self.plan, self.out = plan, out
+        self.visual_checks = os.environ.get("LOCAL_MODE", "").strip().lower() not in ("1", "true", "yes", "on")
         self.audio_choices = load_choices(out)
         self.dubbed = plan.dubbed
         self.beds: dict[str, str] = {}
@@ -130,17 +132,19 @@ class Director:
         self.events.emit("run_started", title=plan.title,
                          shots=[{"id": s.id, "scene": s.scene_id, "takes": s.takes} for s in plan.shots()])  # fmt: skip
         self.dubbed = plan.dubbed
-        if self.dubbed:
+        if self.dubbed and self.visual_checks:
             problems = speaker_problems(plan)
             if problems:
                 raise ValueError("the plan puts the wrong person on screen for a line:\n  " + "\n  ".join(problems))
-            if not os.environ.get("ANTHROPIC_API_KEY"):
-                raise RuntimeError("a dubbed plan needs ANTHROPIC_API_KEY for the speaker check")
+            from .vision import vision_configured
+
+            if not vision_configured():
+                raise RuntimeError("a dubbed plan needs a configured vision provider for the speaker check")
         self.events.emit("phase", name="loading_checkers")
         self.renderer = Renderer(PROJECT, MODEL_DIR, RUNTIME_DIR, plan.width, plan.height, plan.fps, plan.line_seconds)
         self.stt = load_model(STT_MODEL)
         self.voices = VoiceScorer(with_qwen=False)
-        self.faces = CharacterScorer()
+        self.faces = CharacterScorer() if self.visual_checks else None
         self.dubber = Dubber(self.stt, out / "voice") if self.dubbed else None
         self.by_id = {s.id: s for s in plan.shots()}
         if self.dubbed:  # the dub vs the cast voice
@@ -154,7 +158,7 @@ class Director:
         self.look_ref = {
             cid: self._head_embedding([open_rgb(c.canonical_image)], c.head_query)
             for cid, c in plan.characters.items()
-        }
+        } if self.visual_checks else {}
         self.anchor_refs: dict[tuple[str, str], np.ndarray | None] = {}
         self.results: dict[str, ShotResult] = {}
         self.head_embs: dict[str, list[np.ndarray]] = {}  # chosen take per shot → per-frame head embeddings
@@ -244,6 +248,7 @@ class Director:
         if direction:
             prompt += f" Editor direction: {direction.strip()}"
         image = self._start_image(shot)
+        end_image = shot.end_image
         cast_line = self._cast_line(shot)
         frames_n = self._frames(shot, cast_line)
         takes: list[Take] = []
@@ -251,12 +256,12 @@ class Director:
         structural = 0
         for k in range(start_index, start_index + shot.takes + EXTRA_TAKES):
             seed = seed_for(shot.id, k)
-            key = self.renderer.cache_key(prompt, seed, frames_n, image)
+            key = self.renderer.cache_key(prompt, seed, frames_n, image, end_image)
             path = self.out / "takes" / f"{shot.id}_t{k}_{key}.mp4"
             cached = path.exists()
             log(f"[{shot.id}] take {k + 1} (seed {seed}) {'cached' if cached else 'rendering…'}")
             self.events.emit("take_started", shot=shot.id, take=k, seed=seed, cached=cached)
-            r = self.renderer.render(prompt, path, seed, frames_n, image)
+            r = self.renderer.render(prompt, path, seed, frames_n, image, end_image)
             take = Take(k, seed, str(path), round(r.seconds, 1), r.cached, round(duration(path), 2),
                         edit_prompt=direction.strip() if direction else None)
             try:
@@ -281,7 +286,7 @@ class Director:
         chosen = pick(takes)
         self.head_embs[shot.id] = embs_by_take[chosen.index]
         return ShotResult(shot.id, shot.scene_id, shot.start, prompt, str(image) if image else None,
-                          takes, chosen.index, not chosen.passed)  # fmt: skip
+                          takes, chosen.index, not chosen.passed, str(end_image) if end_image else None)  # fmt: skip
 
     def edit_clip(self, shot_id: str, direction: str) -> None:
         """Generate new takes for one shot, choose the best new take, and rebuild the MP4."""
@@ -300,6 +305,7 @@ class Director:
         old.chosen = generated.chosen
         old.prompt = generated.prompt
         old.start_image = generated.start_image
+        old.end_image = generated.end_image
         old.needs_review = generated.needs_review
         self.events.emit("shot_done", shot=shot.id, chosen=old.chosen, takes=len(old.takes),
                          needs_review=old.needs_review)
@@ -390,7 +396,8 @@ class Director:
                 take.failures.append(f"words (WER {take.wer})")
             if self.dubber:
                 span = (said[0][1], said[-1][2]) if said else (0.5, take.seconds - 0.5)
-                self._check_speaker(shot, take, span, on_camera=True)
+                if self.visual_checks:
+                    self._check_speaker(shot, take, span, on_camera=True)
                 self._dub(shot, take, cast_line, said)
             elif shot.character in self.voice_ref:
                 take.voice = round(cosine(self.voice_ref[shot.character], self.voices.embed(wav)["resemblyzer"]), 3)
@@ -401,11 +408,11 @@ class Director:
             take.heard = self.stt.generate(str(extract_audio(path, path.with_suffix(".wav"))), language="en").text.strip()
             if shot.line:  # off camera: the cast voice over the picture, and nobody in view may talk
                 self._save_voice(shot, take, self.dubber.lay_over(cast_line, take.seconds).track)
-                if shot.character:
+                if shot.character and self.visual_checks:
                     span = (OFF_CAMERA_LEAD_S, min(take.seconds - 0.2, OFF_CAMERA_LEAD_S + duration(cast_line)))
                     self._check_speaker(shot, take, span, on_camera=False)
         embs: list[np.ndarray] = []
-        if shot.character and shot.identity_check:
+        if self.visual_checks and shot.character and shot.identity_check:
             query = self.plan.characters[shot.character].head_query
             sampled = frames(path)
             embs = [e for e in (self.faces.embed_character(f, query) for f in sampled) if e is not None]

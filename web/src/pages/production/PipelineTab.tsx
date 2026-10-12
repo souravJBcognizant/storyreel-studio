@@ -110,7 +110,14 @@ function StageContext({ p, stage, onRender }: { p: Production; stage: Stage; onR
     case "story":
       return (
         <div className="flex gap-4">
-          {p.first_frame && <img src={thumbUrl(p.first_frame, 0, 360)} alt="" className="h-24 w-36 shrink-0 rounded-lg object-cover ring-1 ring-white/10" />}
+          <div className="flex max-w-[300px] shrink-0 gap-2 overflow-x-auto pb-1">
+            {p.reference_images.map((ref, i) => (
+              <div key={`${ref.role}-${i}`} className="shrink-0">
+                <img src={thumbUrl(ref.path, 0, 240)} alt={`${ref.role} reference`} className="h-20 w-[120px] rounded-lg object-cover ring-1 ring-white/10" />
+                <div className="mt-1 text-center font-mono text-[9px] tracking-wide text-fg-4 uppercase">{ref.role === "ending" ? "final" : ref.role}</div>
+              </div>
+            ))}
+          </div>
           <p className="line-clamp-5 text-[13px] leading-relaxed text-fg-2">{p.story}</p>
         </div>
       );
@@ -200,7 +207,7 @@ function Waiting({ p }: { p: Production }) {
 function Legend() {
   return (
     <div className="hidden items-center gap-4 lg:flex">
-      {(["claude", "openai", "ltx", "qwen", "ffmpeg"] as const).map((e) => (
+      {(["claude", "openai", "ollama", "local", "ltx", "qwen", "ffmpeg"] as const).map((e) => (
         <EngineTag key={e} engine={e} />
       ))}
       <span className="flex items-center gap-1 text-[11px] text-fg-3">

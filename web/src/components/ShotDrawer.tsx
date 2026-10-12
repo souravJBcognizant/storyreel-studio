@@ -88,6 +88,22 @@ export function ShotDrawer({
                 ) : (
                   <div className="skeleton aspect-[3/2] w-full" />
                 )}
+                {(shot.image || shot.end_image) && (
+                  <div className="mt-3 flex gap-3">
+                    {shot.image && (
+                      <div className="flex items-center gap-2 rounded-lg border border-white/[0.06] bg-ink-850 p-2 pr-3">
+                        <img src={thumbUrl(shot.image, 0, 160)} alt="Start reference" className="h-10 w-[60px] rounded object-cover" />
+                        <span className="text-[10.5px] text-fg-3">Start reference</span>
+                      </div>
+                    )}
+                    {shot.end_image && (
+                      <div className="flex items-center gap-2 rounded-lg border border-white/[0.06] bg-ink-850 p-2 pr-3">
+                        <img src={thumbUrl(shot.end_image, 0, 160)} alt="End reference" className="h-10 w-[60px] rounded object-cover" />
+                        <span className="text-[10.5px] text-fg-3">End reference</span>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {take?.dub && (
                   <div className="mt-3 flex items-center gap-3">
                     <div className="inline-flex rounded-lg border border-white/[0.08] bg-ink-850 p-0.5 text-[12px]">

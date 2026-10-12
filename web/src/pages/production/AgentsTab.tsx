@@ -243,8 +243,8 @@ export function AgentsTab({ p }: { p: Production }) {
         {traced && <Stat label="Elapsed" value={duration(elapsed)} />}
         {traced && <Stat label="Delegations" value={state.delegations.length} />}
         {traced && <Stat label="Tool calls" value={state.calls.length} hint={`${state.calls.filter((c) => c.ok === false).length} failed`} />}
-        <Stat label="Images made" value={images} hint={network.data.image_model ?? "OpenAI"} />
-        <Stat label="Claude cost" value={state.cost != null ? `$${state.cost.toFixed(2)}` : "—"} hint="from neuro-san's token accounting" />
+        <Stat label="Images made" value={images} hint={network.data.image_model ?? (network.data.local_mode ? "not used in local mode" : "OpenAI")} />
+        <Stat label={network.data.llm_provider === "ollama" ? "Local LLM cost" : "Claude cost"} value={network.data.llm_provider === "ollama" ? "$0 API" : state.cost != null ? `$${state.cost.toFixed(2)}` : "—"} hint="from neuro-san's token accounting" />
       </section>
 
       <div className="grid gap-6 2xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
@@ -257,7 +257,7 @@ export function AgentsTab({ p }: { p: Production }) {
 
 // ---------------------------------------------------------------- graph
 
-type AgentData = { name: string; model: string; tools: string[]; status: AgentStatus; tool?: string; since?: number; calls: Record<string, number>; front: boolean; engines: Record<string, string>; step?: number };
+type AgentData = { name: string; model: string; provider: "anthropic" | "ollama"; tools: string[]; status: AgentStatus; tool?: string; since?: number; calls: Record<string, number>; front: boolean; engines: Record<string, string>; step?: number };
 
 function NetworkGraph({ network, state, live }: { network: AgentNetwork; state: TraceState; live: boolean }) {
   const engines = useMemo(() => Object.fromEntries(network.tools.map((t) => [t.name, t.engine])), [network]);
@@ -276,7 +276,7 @@ function NetworkGraph({ network, state, live }: { network: AgentNetwork; state: 
         id: a.name,
         type: "agent",
         position: { x, y },
-        data: { name: a.name, model: a.model, tools: isFront ? [] : a.tools, status: st.status, tool: st.tool, since: st.toolSince, calls: st.calls, front: isFront, engines, step } satisfies AgentData,
+        data: { name: a.name, model: a.model, provider: network.llm_provider, tools: isFront ? [] : a.tools, status: st.status, tool: st.tool, since: st.toolSince, calls: st.calls, front: isFront, engines, step } satisfies AgentData,
       };
     };
     // Hub and spokes: the Director sits between the two rows, so no delegation edge runs behind a node.
@@ -327,7 +327,7 @@ function NetworkGraph({ network, state, live }: { network: AgentNetwork; state: 
 }
 
 function AgentNode({ data }: NodeProps<Node<AgentData>>) {
-  const { name, model, tools, status, tool, since, calls, front, engines, step } = data;
+  const { name, model, provider, tools, status, tool, since, calls, front, engines, step } = data;
   const tier = model.includes("opus") ? "Opus" : model.includes("sonnet") ? "Sonnet" : model;
   return (
     <div
@@ -359,8 +359,8 @@ function AgentNode({ data }: NodeProps<Node<AgentData>>) {
             {name}
           </div>
           <div className="flex items-center gap-1.5 text-[10.5px]">
-            <span className="size-1.5 rounded-[2px]" style={{ background: ENGINE.claude.color }} />
-            <span className="text-engine-claude">Claude {tier}</span>
+            <span className="size-1.5 rounded-[2px]" style={{ background: ENGINE[provider === "ollama" ? "ollama" : "claude"].color }} />
+            <span className={provider === "ollama" ? "text-engine-ollama" : "text-engine-claude"}>{provider === "ollama" ? `Ollama · ${tier}` : `Claude ${tier}`}</span>
             <span className="font-mono text-fg-4">{status === "idle" ? "waiting" : status}</span>
           </div>
         </div>
