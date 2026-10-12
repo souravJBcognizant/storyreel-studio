@@ -170,24 +170,19 @@ def agent_progress(events: list[dict]) -> dict | None:
     }  # fmt: skip
 
 
-def ensure_imports() -> None:
-    """Register the Stage 1 film as the first production (its files stay where they are)."""
+def cleanup_legacy_import() -> None:
+    """Remove the old Stage 1 demo registration, whose untracked media may not exist."""
     pid = "elios-first-flight"
-    if (PRODUCTIONS / pid / "production.json").exists() or not (PROJECT / "stage1" / "plan.json").exists():
+    folder = PRODUCTIONS / pid
+    metadata = folder / "production.json"
+    if not metadata.exists():
         return
-    register(
-        pid,
-        "Elio's First Flight",
-        "Late at night in his cluttered workshop, Elio, a young inventor, finishes a small homemade flying machine. "
-        "At golden hour he carries it to the beach, counts down nervously and watches it lift off. From a cliff at "
-        "sunset he watches it circle away into the sky.",
-        first_frame="stage0/out/ltx/character_ref.png",
-        plan="stage1/plan.json",
-        out="stage1/out/elio",
-        steps={"story": "done", "analysis": "skipped", "plan": "done", "sheets": "skipped", "keyframes": "skipped",
-               "voice": "done", "render": "done", "assemble": "done", "film": "done"},  # fmt: skip
-        source="Stage 1 test (hand-written plan)",
-    )
+    try:
+        prod = json.loads(metadata.read_text())
+    except (OSError, json.JSONDecodeError):
+        return
+    if prod.get("source") == "Stage 1 test (hand-written plan)":
+        shutil.rmtree(folder)
 
 
 def create(title: str, story: str, frame_name: str, frame_bytes: bytes, target_seconds: int,
@@ -252,8 +247,6 @@ def _remap_clone_value(value, source_dir: Path, target_dir: Path, source_id: str
 def duplicate(pid: str, title: str) -> dict:
     """Create a self-contained copy whose media and metadata can diverge from the source."""
     source = _read(pid)
-    if source.get("source", "").startswith("Stage"):
-        raise HTTPException(422, "imported test productions cannot be used as templates")
     title = title.strip()
     if len(title) < 2:
         raise HTTPException(422, "give the copied production a title")
@@ -305,9 +298,7 @@ def duplicate(pid: str, title: str) -> dict:
 
 
 def delete(pid: str) -> None:
-    prod = _read(pid)
-    if prod.get("source", "").startswith("Stage"):
-        raise HTTPException(400, "imported test productions can't be deleted from the app")
+    _read(pid)
     shutil.rmtree(PRODUCTIONS / pid)
 
 

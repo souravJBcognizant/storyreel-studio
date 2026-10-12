@@ -63,6 +63,24 @@ class DuplicateProductionTests(unittest.TestCase):
         (target / "inputs" / "first.png").write_bytes(b"changed")
         self.assertEqual((self.source / "inputs" / "first.png").read_bytes(), b"frame")
 
+    def test_startup_removes_only_the_broken_legacy_demo_registration(self):
+        legacy = self.productions / "elios-first-flight"
+        legacy.mkdir()
+        (legacy / "production.json").write_text(json.dumps({
+            "id": "elios-first-flight", "source": "Stage 1 test (hand-written plan)"
+        }))
+        with patch.object(store, "PRODUCTIONS", self.productions):
+            store.cleanup_legacy_import()
+        self.assertFalse(legacy.exists())
+
+        legacy.mkdir()
+        (legacy / "production.json").write_text(json.dumps({
+            "id": "elios-first-flight", "source": "Uploaded"
+        }))
+        with patch.object(store, "PRODUCTIONS", self.productions):
+            store.cleanup_legacy_import()
+        self.assertTrue(legacy.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

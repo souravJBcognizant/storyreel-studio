@@ -215,8 +215,8 @@ generation: click **Re-render**. The cache reuses every unchanged shot, so only 
 are generated before the film is assembled again.
 
 To remove an entire production, return to **Productions**, hover over its card, click the trash icon and
-confirm. This permanently deletes that production's local inputs, plans, takes and finished film. Imported
-test productions and productions with a running job cannot be deleted.
+confirm. This permanently deletes that production's local inputs, plans, takes and finished film.
+Productions with a running job cannot be deleted until that job is cancelled or finishes.
 
 ## How it works
 

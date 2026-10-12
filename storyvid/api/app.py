@@ -28,7 +28,7 @@ jobs = JobManager()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    store.ensure_imports()
+    store.cleanup_legacy_import()
     jobs.start()
     yield
     jobs.stop()
