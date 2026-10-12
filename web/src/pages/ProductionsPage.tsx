@@ -10,6 +10,9 @@ export function productionState(p: ProductionSummary) {
   if (p.active_job?.status === "queued") return { status: "queued" as const, label: "Queued" };
   if (p.active_job?.kind === "preprod") return { status: "running" as const, label: "Agents planning" };
   if (p.active_job?.kind === "audition") return { status: "running" as const, label: "Voice audition" };
+  if (p.active_job?.kind === "export") return { status: "running" as const, label: "Rebuilding film" };
+  if (p.active_job?.kind === "clip") return { status: "running" as const, label: "Generating clip" };
+  if (p.active_job?.kind === "overlay") return { status: "running" as const, label: "Generating audio" };
   if (p.active_job) return { status: "running" as const, label: p.progress ? `Rendering ${p.progress.shots_done}/${p.progress.shots_total}` : "Rendering" };
   if (p.steps.plan === "awaiting_approval" || p.steps.keyframes === "awaiting_approval" || p.steps.voice === "awaiting_approval")
     return { status: "awaiting_approval" as const, label: "Needs your approval" };

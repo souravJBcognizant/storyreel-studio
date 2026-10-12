@@ -36,8 +36,9 @@ from dotenv import load_dotenv
 
 from . import soundtrack
 from .assemble import Clip, assemble, picture
-from .dub import OFF_CAMERA_LEAD_S, Dubber, DubError, listen, words
+from .dub import DUB_VERSION, OFF_CAMERA_LEAD_S, Dubber, DubError, listen, words
 from .dub import SR as VOICE_SR
+from .edit import audio_source, load_choices, write_json
 from .events import EventLog
 from .media import Renderer, contact_sheet, duration, extract_audio, ffmpeg, file_sha1, frames, frames_for, last_frame
 from .plan import Plan, Shot, build_prompt, load_plan, speaker_problems
@@ -75,6 +76,8 @@ class Take:
     speaker: str | None = None  # who Claude saw talking (dubbed plans)
     speaker_note: str | None = None
     dub: str | None = None  # the take's picture with the cast voice, for comparing with LTX's own
+    dub_version: int = 0
+    performance: list | None = None  # original speech timings, reusable when rebuilding audio
     dub_words: str | None = None  # words timed to the performance / words in the line
     speech: list[float] | None = None  # on-camera lines: where the cast voice sits in the take (start, end s)
     voice: float | None = None
@@ -82,6 +85,8 @@ class Take:
     continuity: float | None = None
     heads: str | None = None  # frames with a detected head / frames sampled
     failures: list[str] = field(default_factory=list)
+    edit_prompt: str | None = None  # human direction that produced this video take
+    audio_prompt: str | None = None  # human direction that produced its current overlay
 
     @property
     def passed(self) -> bool:
@@ -105,10 +110,20 @@ def seed_for(shot_id: str, take: int) -> int:
 
 
 class Director:
-    def __init__(self, plan: Plan, out: Path):
-        from mlx_audio.stt.utils import load_model
-
+    def __init__(self, plan: Plan, out: Path, *, assemble_only: bool = False):
         self.plan, self.out = plan, out
+        self.audio_choices = load_choices(out)
+        self.dubbed = plan.dubbed
+        self.beds: dict[str, str] = {}
+        if assemble_only:
+            # Editing existing takes needs no video generator, face scorer, speaker API or voice scorer.
+            self.results = self._load_results()
+            self.events = EventLog(out)
+            self.voice_ref = {}
+            self.stt = None
+            self.dubber = None
+            return
+        from mlx_audio.stt.utils import load_model
         for sub in ("takes", "anchors", "contact"):
             (out / sub).mkdir(parents=True, exist_ok=True)
         self.events = EventLog(out)
@@ -145,6 +160,15 @@ class Director:
         self.head_embs: dict[str, list[np.ndarray]] = {}  # chosen take per shot → per-frame head embeddings
         self.beds: dict[str, str] = {}  # scene → the shot whose sound is its ambience
 
+    def _load_results(self) -> dict[str, ShotResult]:
+        data = json.loads((self.out / "plan.resolved.json").read_text())
+        results = {}
+        for shot in self.plan.shots():
+            r = data[shot.id]
+            takes = [Take(**{k: v for k, v in t.items() if k in Take.__dataclass_fields__}) for t in r["takes"]]
+            results[shot.id] = ShotResult(**{**r, "takes": takes})
+        return results
+
     def _anchor_ref(self, image: Path, query: str):
         key = (str(image), query)
         if key not in self.anchor_refs:
@@ -171,17 +195,61 @@ class Director:
         self.events.emit("film_done", path=str(film), seconds=round(duration(film), 2),
                          wall_s=round(time.perf_counter() - t0, 1))  # fmt: skip
 
+    def export(self) -> None:
+        """Repair old overlays and rebuild the edit, reusing every chosen video take."""
+        t0 = time.perf_counter()
+        self.events.emit("run_started", title=self.plan.title,
+                         shots=[{"id": s.id, "scene": s.scene_id} for s in self.plan.shots()])
+        self.events.emit("phase", name="repairing_audio")
+        for shot in self.plan.shots():
+            res = self.results[shot.id]
+            take = res.takes[res.chosen]
+            if self._audio_source(shot) == "cast" and (
+                take.dub_version != DUB_VERSION or not Path(take.path).with_suffix(".dub.wav").exists()
+                or not take.dub or not Path(take.dub).exists()
+            ):
+                if self.dubber is None:
+                    self.dubber = Dubber(None, self.out / "voice")
+                cast_line = self._cast_line(shot)
+                if shot.delivery == "on":
+                    if take.performance is None:
+                        self.stt = self.stt or self.dubber.stt
+                        if self.stt is None:
+                            from mlx_audio.stt.utils import load_model
+
+                            self.stt = load_model(STT_MODEL)
+                        _, take.performance = listen(self.stt, extract_audio(Path(take.path), Path(take.path).with_suffix(".wav")))
+                    self.dubber.stt = self.stt or self.dubber.stt
+                    self._dub(shot, take, cast_line, take.performance, strict=True)
+                else:
+                    self._save_voice(shot, take, self.dubber.lay_over(cast_line, take.seconds).track)
+                res.needs_review = not take.passed
+            self.events.emit("shot_done", shot=shot.id, chosen=res.chosen, takes=len(res.takes),
+                             needs_review=res.needs_review)
+        self._save()
+        self.events.emit("phase", name="assembling")
+        self.cut()
+        self.report(time.perf_counter() - t0, edited=True)
+        (self.out / "plan.resolved.partial.json").replace(self.out / "plan.resolved.json")
+        self.events.emit("film_done", path=str(self.out / "final.mp4"),
+                         seconds=round(duration(self.out / "final.mp4"), 2), wall_s=round(time.perf_counter() - t0, 1))
+
+    def _audio_source(self, shot: Shot) -> str:
+        return audio_source(self.plan, shot, self.audio_choices)
+
     # ------------------------------------------------------------ shooting
 
-    def shoot(self, shot: Shot) -> ShotResult:
+    def shoot(self, shot: Shot, *, direction: str | None = None, start_index: int = 0) -> ShotResult:
         prompt = build_prompt(self.plan, shot)
+        if direction:
+            prompt += f" Editor direction: {direction.strip()}"
         image = self._start_image(shot)
         cast_line = self._cast_line(shot)
         frames_n = self._frames(shot, cast_line)
         takes: list[Take] = []
         embs_by_take: dict[int, list[np.ndarray]] = {}
         structural = 0
-        for k in range(shot.takes + EXTRA_TAKES):
+        for k in range(start_index, start_index + shot.takes + EXTRA_TAKES):
             seed = seed_for(shot.id, k)
             key = self.renderer.cache_key(prompt, seed, frames_n, image)
             path = self.out / "takes" / f"{shot.id}_t{k}_{key}.mp4"
@@ -189,7 +257,8 @@ class Director:
             log(f"[{shot.id}] take {k + 1} (seed {seed}) {'cached' if cached else 'rendering…'}")
             self.events.emit("take_started", shot=shot.id, take=k, seed=seed, cached=cached)
             r = self.renderer.render(prompt, path, seed, frames_n, image)
-            take = Take(k, seed, str(path), round(r.seconds, 1), r.cached, round(duration(path), 2))
+            take = Take(k, seed, str(path), round(r.seconds, 1), r.cached, round(duration(path), 2),
+                        edit_prompt=direction.strip() if direction else None)
             try:
                 take, embs = self.check(shot, take, cast_line)
             except Exception as exc:  # a bug in a check: flag this shot and keep the film going
@@ -213,6 +282,68 @@ class Director:
         self.head_embs[shot.id] = embs_by_take[chosen.index]
         return ShotResult(shot.id, shot.scene_id, shot.start, prompt, str(image) if image else None,
                           takes, chosen.index, not chosen.passed)  # fmt: skip
+
+    def edit_clip(self, shot_id: str, direction: str) -> None:
+        """Generate new takes for one shot, choose the best new take, and rebuild the MP4."""
+        t0 = time.perf_counter()
+        if not self.results:
+            self.results = self._load_results()
+        shot = next((s for s in self.plan.shots() if s.id == shot_id), None)
+        if not shot:
+            raise ValueError(f"unknown shot {shot_id!r}")
+        self.events.emit("run_started", title=self.plan.title,
+                         shots=[{"id": shot.id, "scene": shot.scene_id, "takes": shot.takes}])
+        self.events.emit("phase", name="rendering_edit")
+        old = self.results[shot.id]
+        generated = self.shoot(shot, direction=direction, start_index=len(old.takes))
+        old.takes.extend(generated.takes)
+        old.chosen = generated.chosen
+        old.prompt = generated.prompt
+        old.start_image = generated.start_image
+        old.needs_review = generated.needs_review
+        self.events.emit("shot_done", shot=shot.id, chosen=old.chosen, takes=len(old.takes),
+                         needs_review=old.needs_review)
+        self._finish_edit(t0)
+
+    def edit_overlay(self, shot_id: str, direction: str) -> None:
+        """Generate and align a directed overlay for one chosen take, then rebuild the MP4."""
+        t0 = time.perf_counter()
+        shot = next((s for s in self.plan.shots() if s.id == shot_id), None)
+        if not shot or not (self.plan.dubbed and shot.line):
+            raise ValueError(f"shot {shot_id!r} has no overlay audio")
+        self.events.emit("run_started", title=self.plan.title,
+                         shots=[{"id": shot.id, "scene": shot.scene_id}])
+        self.events.emit("phase", name="generating_overlay")
+        self.dubber = self.dubber or Dubber(None, self.out / "voice")
+        result = self.results[shot.id]
+        take = result.takes[result.chosen]
+        character = self.plan.characters[shot.speaker]
+        cast_line = self.dubber.directed_line(character.voice_phrase, shot.line, direction)
+        if shot.delivery == "on":
+            if take.performance is None:
+                from mlx_audio.stt.utils import load_model
+
+                self.stt = load_model(STT_MODEL)
+                _, take.performance = listen(self.stt, extract_audio(Path(take.path), Path(take.path).with_suffix(".wav")))
+            self.dubber.stt = self.stt or self.dubber.stt
+            self._dub(shot, take, cast_line, take.performance, strict=True)
+        else:
+            self._save_voice(shot, take, self.dubber.lay_over(cast_line, take.seconds).track)
+        take.audio_prompt = direction.strip()
+        result.needs_review = not take.passed
+        self.events.emit("shot_done", shot=shot.id, chosen=result.chosen, takes=len(result.takes),
+                         needs_review=result.needs_review)
+        self._finish_edit(t0)
+
+    def _finish_edit(self, started: float) -> None:
+        self._save()
+        self.events.emit("phase", name="assembling")
+        self.cut()
+        self.report(time.perf_counter() - started, edited=True)
+        (self.out / "plan.resolved.partial.json").replace(self.out / "plan.resolved.json")
+        film = self.out / "final.mp4"
+        self.events.emit("film_done", path=str(film), seconds=round(duration(film), 2),
+                         wall_s=round(time.perf_counter() - started, 1))
 
     def _start_image(self, shot: Shot) -> Path | None:
         if shot.start == "anchor":
@@ -330,14 +461,25 @@ class Director:
             if verdict.speaker_is_talking or verdict.someone_else_talking:
                 take.failures.append("someone in view talks")
 
-    def _dub(self, shot: Shot, take: Take, cast_line: Path, said: list[tuple[str, float, float]]) -> None:
+    def _dub(self, shot: Shot, take: Take, cast_line: Path, said: list[tuple[str, float, float]], *, strict: bool = False) -> None:
+        take.performance = said
+        take.dub_words = None
+        take.failures = [f for f in take.failures if not f.startswith("dub (")]
         try:
-            dub = self.dubber.dub(said, cast_line, shot.line, take.seconds)
+            path = Path(take.path)
+            original = extract_audio(path, path.with_suffix(".wav"))
+            dub = self.dubber.dub(said, cast_line, shot.line, take.seconds, original_audio=original)
             take.dub_words = f"{dub.words_found}/{len(words(shot.line))}"
         except DubError as exc:
+            if strict:
+                raise DubError(f"{shot.id}: {exc}. Choose original audio for this shot to export without an overlay.") from exc
             take.failures.append(f"dub ({exc})")
             dub = self.dubber.lay_over(cast_line, take.seconds)  # if this take is still the best, the line is heard
         self._save_voice(shot, take, dub.track)
+        if not dub.alignment:
+            # A fallback is playable for reviewing a take, but must be retried before exporting.
+            take.dub_version = 0
+        Path(take.path).with_suffix(".dub.alignment.json").write_text(json.dumps(dub.alignment, indent=2))
         # Whisper's first word often starts with the silence before it; the placed voice is exact.
         voiced = np.nonzero(np.abs(dub.track) > 1e-3)[0]
         take.speech = [round(voiced[0] / VOICE_SR, 2), round(voiced[-1] / VOICE_SR, 2)] if len(voiced) else None
@@ -350,6 +492,8 @@ class Director:
         ffmpeg("-i", str(path), "-i", str(wav), "-map", "0:v", "-map", "1:a", "-c:v", "copy",
                "-c:a", "aac", "-b:a", "128k", "-shortest", str(preview))  # fmt: skip
         take.dub = str(preview)
+        take.dub_version = DUB_VERSION
+        take.voice = None
         if shot.speaker in self.voice_ref:
             take.voice = round(cosine(self.voice_ref[shot.speaker], self.voices.embed(wav)["resemblyzer"]), 3)
 
@@ -373,11 +517,12 @@ class Director:
         work = self.out / "assembly"
         parts = picture(clips, work, self.plan.fps, self.plan.width, self.plan.height)
         self.beds = self._bed_sources() if self.dubbed else {}
-        placed, at = [], 0.0
+        placed, markers, at = [], [], 0.0
         for shot, clip, part in zip(shots, clips, parts):
             length = duration(part)
             voice = None
-            if self.dubbed and shot.line:
+            use_original = self._audio_source(shot) == "original"
+            if self.dubbed and shot.line and not use_original:
                 dub = clip.path.with_suffix(".dub.wav")
                 if dub.exists():
                     voice, _ = sf.read(dub, dtype="float32")
@@ -385,11 +530,17 @@ class Director:
                     voice = self.dubber.lay_over(self._cast_line(shot), duration(clip.path)).track
             placed.append(soundtrack.Placed(
                 shot.scene_id, clip.path, at, length, clip.trim_start, clip.fade_in, clip.fade_out, voice,
-                native=not self.dubbed or self._clean(shot), bed_source=self.beds.get(shot.scene_id) == shot.id,
+                native=not self.dubbed or (bool(shot.line) and use_original) or self._clean(shot),
+                bed_source=self.beds.get(shot.scene_id) == shot.id,
+                original_dialogue=use_original and bool(shot.line),
             ))  # fmt: skip
+            markers.append({"shot": shot.id, "scene": shot.scene_id, "start": round(at, 3),
+                            "end": round(at + length, 3), "label": shot.line or shot.action.format(**self.plan.props)})
             at += length
         track = soundtrack.build(placed, self.dubbed, work / "soundtrack.wav")
         film = assemble(parts, track, self.out / "final.mp4", work, DISCLOSURE)
+        write_json(self.out / "edit.json", {"audio_sources": {s.id: self._audio_source(s) for s in shots},
+                                            "dub_version": DUB_VERSION, "markers": markers})
         log(f"film: {film} ({duration(film):.1f} s)")
 
     def _cut_points(self, shots: list[Shot], i: int) -> tuple[float, float | None]:
@@ -401,7 +552,9 @@ class Director:
         follows = shot.start == "continue" and i > 0 and shot.from_shot == shots[i - 1].id
         start = 1 / self.plan.fps if shot.start == "continue" else 0.0  # its first frame repeats the shot it continues
         end = None
-        if self.dubbed and take.speech:
+        # A dub's speech window may differ from the original. Keep original takes intact so switching
+        # sources never cuts off native dialogue using the cast voice's old timings.
+        if self.dubbed and self._audio_source(shot) == "cast" and take.speech:
             continued = i + 1 < len(shots) and shots[i + 1].start == "continue" and shots[i + 1].from_shot == shot.id
             if not follows:
                 start = max(start, take.speech[0] - LEAD_KEEP_S)
@@ -438,26 +591,27 @@ class Director:
         # failed re-render never overwrites the last complete results.
         (self.out / "plan.resolved.partial.json").write_text(json.dumps(data, indent=2))
 
-    def report(self, wall_s: float) -> None:
-        renders = [t for r in self.results.values() for t in r.takes if not t.cached]
+    def report(self, wall_s: float, *, edited: bool = False) -> None:
+        renders = [] if edited else [t for r in self.results.values() for t in r.takes if not t.cached]
         lines = [
             f"# {self.plan.title} — render report", "",
             f"Film: `final.mp4` ({duration(self.out / 'final.mp4'):.1f} s). "
             f"Wall time {wall_s / 60:.1f} min, {len(renders)} new renders "
             f"({sum(t.render_s for t in renders) / 60:.1f} min of LTX).", "",
-            "| Shot | Start | Takes | Chosen | Length | Words (WER) | Speaker | Dub | Voice | Identity | Continuity | Status |",
-            "|---|---|---|---|---|---|---|---|---|---|---|---|",
+            "| Shot | Start | Takes | Chosen | Length | Words (WER) | Speaker | Dub | Voice | Identity | Continuity | Audio | Status |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
         ]  # fmt: skip
+        sources = {s.id: self._audio_source(s) for s in self.plan.shots()}
         for r in self.results.values():
             t = r.takes[r.chosen]
             status = "needs review: " + ", ".join(t.failures) if r.needs_review else "pass"
             lines.append(
                 f"| {r.shot} | {r.start} | {len(r.takes)} | {t.index + 1} (seed {t.seed}) | {t.seconds} s "
                 f"| {na(t.wer)} | {na(t.speaker)} | {na(t.dub_words)} | {na(t.voice)} | {na(t.identity)} "
-                f"| {na(t.continuity)} | {status} |"
+                f"| {na(t.continuity)} | {sources[r.shot]} | {status} |"
             )
         if self.dubbed:
-            lines += ["", "Voices are each character's cast voice, timed to LTX's performance (on camera) or laid over the picture (off camera)."]
+            lines += ["", "Audio follows the per-shot choices above. Overlay audio follows the original recording’s speech onsets, phrase pauses and word timings. Exact lip sync still depends on the original performance and timing recognition."]
             lines += [f"Ambience under the lines of scene {s.id}: " + (f"the sound of {self.beds[s.id]}" if s.id in self.beds else "none (no shot without speech)")
                       for s in self.plan.scenes]  # fmt: skip
         lines += ["", "Contact sheets for every take are in `contact/`; all scores in `plan.resolved.json`."]
@@ -506,11 +660,28 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("plan", type=Path)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--assemble-only", action="store_true", help="rebuild audio and edit from saved takes")
+    ap.add_argument("--edit-shot", help="generate a new take for just this shot")
+    ap.add_argument("--edit-overlay", help="regenerate overlay audio for just this shot")
+    ap.add_argument("--direction", help="human direction for a focused edit")
     args = ap.parse_args()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     try:
-        Director(load_plan(args.plan), out).run()
+        focused = args.edit_shot or args.edit_overlay
+        if focused and not args.direction:
+            ap.error("--direction is required for a focused edit")
+        if focused and args.assemble_only:
+            ap.error("choose one of --assemble-only, --edit-shot or --edit-overlay")
+        director = Director(load_plan(args.plan), out, assemble_only=bool(args.assemble_only or args.edit_overlay))
+        if args.edit_shot:
+            director.edit_clip(args.edit_shot, args.direction)
+        elif args.edit_overlay:
+            director.edit_overlay(args.edit_overlay, args.direction)
+        elif args.assemble_only:
+            director.export()
+        else:
+            director.run()
     except Exception as exc:
         EventLog(out).emit("run_failed", error=f"{type(exc).__name__}: {exc}")
         raise

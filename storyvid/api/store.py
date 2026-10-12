@@ -13,6 +13,8 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from ..events import latest_run
+from ..dub import DUB_VERSION
+from ..edit import audio_source, load_choices, load_edit, save_choice
 from ..plan import load_plan
 from .config import CLAUDE_MODEL, CLAUDE_MODEL_ROUTINE, OPENAI_IMAGE_MODEL, PRODUCTIONS, PROJECT
 from .files import media_duration, to_virtual
@@ -37,7 +39,7 @@ STAGES = [
      "detail": "Each speaking character's voice, designed once; every line is spoken in it"},
     {"key": "render", "label": "Render & QA", "owner": "ProductionManager", "engine": "ltx",
      "model": "LTX-2.5 (local)",
-     "detail": "Every take checked: the words, who is talking (Claude), and the cast voice timed to the lips"},
+     "detail": "Every take checked: the words, who is talking (Claude), and the cast voice timed to the performance"},
     {"key": "assemble", "label": "Edit", "owner": "Editor", "engine": "ffmpeg", "model": "ffmpeg",
      "detail": "Cut, fades, scene ambience under the voices, loudness"},
     {"key": "film", "label": "Film", "owner": "You", "engine": "user", "detail": "Watch, download, share"},
@@ -216,6 +218,21 @@ def _resolved(out: Path | None) -> dict:
     return json.loads(f.read_text()) if f and f.exists() else {}
 
 
+def choose_audio(pid: str, sid: str, source: str) -> None:
+    plan_path, out = plan_and_out(pid)
+    if source not in ("cast", "original"):
+        raise HTTPException(422, "audio source must be cast or original")
+    plan = load_plan(plan_path) if plan_path else None
+    shot = next((s for s in plan.shots() if s.id == sid), None) if plan else None
+    if not shot:
+        raise HTTPException(404, "no such shot")
+    if sid not in _resolved(out):
+        raise HTTPException(409, "render the shot before choosing its audio")
+    if source == "cast" and not (plan.dubbed and shot.line):
+        raise HTTPException(422, "this shot has no cast voice")
+    save_choice(out, sid, source)
+
+
 def _action(plan, shot) -> str:
     """A shot's action as people read it: older plans hold prop descriptions as full sentences ("A sleek …
     palette."), which read oddly inside an action, so the article and the full stop are dropped here."""
@@ -229,9 +246,10 @@ def _take_view(take: dict, out: Path) -> dict:
     return {
         **{k: take.get(k) for k in ("index", "seed", "render_s", "cached", "seconds", "heard", "wer", "voice",
                                      "identity", "continuity", "heads", "failures", "passed", "speaker",
-                                     "speaker_note", "dub_words")},
+                                     "speaker_note", "dub_words", "edit_prompt", "audio_prompt")},
         "path": to_virtual(path),
         "dub": to_virtual(Path(take["dub"])) if take.get("dub") and Path(take["dub"]).exists() else None,
+        "dub_revision": Path(take["dub"]).stat().st_mtime_ns if take.get("dub") and Path(take["dub"]).exists() else None,
         "contact": to_virtual(contact) if contact.exists() else None,
     }  # fmt: skip
 
@@ -298,7 +316,13 @@ def _film(out: Path | None, plan, resolved: dict) -> dict | None:
         markers.append({"shot": shot.id, "scene": shot.scene_id, "start": round(t, 3), "end": round(t + seconds, 3),
                         "label": shot.line or _action(plan, shot).split(".")[0]})  # fmt: skip
         t += seconds
-    return {"path": to_virtual(film), "duration": media_duration(film), "markers": markers,
+    edit = load_edit(out)
+    choices = load_choices(out)
+    sources = {s.id: audio_source(plan, s, choices) for s in plan.shots()} if plan else {}
+    previous = edit.get("audio_sources", {s.id: audio_source(plan, s, {}) for s in plan.shots()} if plan else {})
+    return {"path": to_virtual(film), "duration": media_duration(film), "markers": edit.get("markers", markers),
+            "revision": film.stat().st_mtime_ns, "audio_pending": sources != previous,
+            "audio_upgrade": "cast" in sources.values() and edit.get("dub_version", 0) != DUB_VERSION,
             "report": (out / "report.md").read_text() if (out / "report.md").exists() else None}  # fmt: skip
 
 
@@ -357,7 +381,7 @@ def _active(pid: str, jobs: list[dict]) -> dict | None:
 def _job_progress(active: dict | None, out: Path | None, pid: str) -> dict | None:
     if not active:
         return None
-    if active.get("kind", "render") == "render":
+    if active.get("kind", "render") in ("render", "export", "clip", "overlay"):
         return progress(latest_run(out)) if out and out.exists() else None
     folder = PRODUCTIONS / pid / "preprod" / ("voice" if active.get("kind") == "audition" else "")
     events = latest_run(folder)
@@ -390,7 +414,9 @@ def detail(pid: str, jobs: list[dict]) -> dict:
     resolved = _resolved(out)
     events = latest_run(out) if out and out.exists() else []
     active = _active(pid, jobs)
-    rendering = bool(active) and active.get("kind", "render") == "render"
+    rendering = bool(active) and active.get("kind", "render") in ("render", "clip")
+    editing = bool(active) and active.get("kind") in ("export", "overlay")
+    choices = load_choices(out) if out else {}
     live = _live_state(events) if rendering else {}
 
     scenes = []
@@ -412,6 +438,8 @@ def detail(pid: str, jobs: list[dict]) -> dict:
                 "image": to_virtual(shot.image) if shot.image else None,
                 "character": shot.character, "line": shot.line, "action": _action(plan, shot),
                 "speaker": shot.speaker, "delivery": shot.delivery,
+                "audio_source": audio_source(plan, shot, choices),
+                "has_cast_audio": bool(plan.dubbed and shot.line),
                 "camera": shot.camera, "seconds": shot.seconds, "identity_check": shot.identity_check,
                 "takes_planned": shot.takes, "status": status,
                 "current_take": now.get("current_take") if now else None,
@@ -428,6 +456,8 @@ def detail(pid: str, jobs: list[dict]) -> dict:
     steps = dict(prod["steps"])
     if rendering:
         steps["render"] = "running" if active["status"] != "queued" else "queued"
+    if editing:
+        steps["assemble"] = "running" if active["status"] != "queued" else "queued"
     return {
         **summary(pid, jobs),
         "story": prod["story"],
@@ -437,8 +467,8 @@ def detail(pid: str, jobs: list[dict]) -> dict:
         "scenes": scenes,
         "film": _film(out, plan, resolved),
         "out": to_virtual(out) if out and out.exists() else None,
-        "progress": progress(events) if not active or rendering else None,
-        "agent_progress": _job_progress(active, out, pid) if active and not rendering else None,
+        "progress": progress(events) if not active or rendering or editing else None,
+        "agent_progress": _job_progress(active, out, pid) if active and not (rendering or editing) else None,
         "preprod": _preprod_view(pid),
         "jobs": [j for j in jobs if j["production"] == pid],
         "can_render": bool(plan) and not active and ready_to_render(pid),

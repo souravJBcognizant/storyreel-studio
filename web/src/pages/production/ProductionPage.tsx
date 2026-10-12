@@ -93,7 +93,7 @@ export function ProductionPage() {
             <StatusPill status={state.status} label={state.label} />
             {p.active_job ? (
               <Button variant="danger" icon={<Square className="size-3.5 fill-current" />} loading={cancel.isPending} onClick={() => cancel.mutate()}>
-                {p.active_job.status === "queued" ? "Remove from queue" : p.active_job.kind === "render" ? "Cancel render" : "Stop agents"}
+                {p.active_job.status === "queued" ? "Remove from queue" : p.active_job.kind === "export" ? "Cancel rebuild" : p.active_job.kind === "clip" ? "Cancel clip" : p.active_job.kind === "overlay" ? "Cancel audio" : p.active_job.kind === "render" ? "Cancel render" : "Stop agents"}
               </Button>
             ) : p.scenes.length === 0 ? null : (
               <Button
@@ -148,7 +148,7 @@ export function ProductionPage() {
         {tab === "files" && <FileBrowser root={filesRoot} />}
       </div>
 
-      <ShotDrawer shot={found.shot} scene={found.scene} onClose={closeShot} />
+      <ShotDrawer shot={found.shot} scene={found.scene} productionId={id} busy={!!p.active_job} onClose={closeShot} />
     </>
   );
 }

@@ -1,16 +1,16 @@
 """Dubbing: every line in the character's cast voice, timed to the performance LTX rendered.
 
-LTX animates the mouth to the speech it generates itself, so the voice can't simply be swapped: a
-different recording drifts out of sync. But the cast voice says the same words. Each of its words is
-placed where LTX's character says that word, and stretched by at most ±30% to fit, so the mouth shapes
-line up while the voice is the same in every shot. Off-camera lines skip the alignment and are laid over
-the picture after a short lead-in.
+Use the original recording as the timing reference. Measure speech onsets and pauses in both
+recordings, then align words inside each phrase with continuous, pitch-preserving time stretching.
+Only phrase boundaries are cut; individual words are never rendered as independent audio pieces.
+Off-camera lines keep their natural timing.
 
 Qwen3-TTS (Base) clones every line from the character's cast voice; Whisper supplies the word timings.
 """
 
 import difflib
 import hashlib
+import json
 import re
 import subprocess
 import tempfile
@@ -23,7 +23,8 @@ import soundfile as sf
 SR = 24000
 CLONE_MODEL = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"
 MAX_STRETCH = 1.3  # beyond about ±30% stretched speech sounds slowed down or sped up
-FADE = int(0.006 * SR)  # 6 ms fades so stitched words never click
+FADE = int(0.006 * SR)  # fade only the outer edges of a complete line
+DUB_VERSION = 3  # align to the original audio, including its lead-in and phrase pauses
 OFF_CAMERA_LEAD_S = 0.35
 SEED = 7
 
@@ -47,7 +48,7 @@ def listen(stt, audio: Path) -> tuple[str, list[tuple[str, float, float]]]:
 @dataclass
 class Dub:
     track: np.ndarray  # the voice on the take's timeline (SR, mono)
-    alignment: list[dict]  # per word: where LTX said it, where the cast voice was placed, stretch
+    alignment: list[dict]  # phrase spans and word timing anchors in the original and overlay
     words_found: int
 
 
@@ -61,7 +62,7 @@ class Dubber:
         self.cache = cache
         self.cache.mkdir(parents=True, exist_ok=True)
         self._tts = None
-        self._timings: dict[Path, list[tuple[str, float, float]]] = {}
+        self._timings: dict[tuple[Path, str], list] = {}
 
     # ------------------------------------------------------------ cast voice lines
 
@@ -84,6 +85,18 @@ class Dubber:
         sf.write(out, audio[nz[0]: nz[-1] + 1] if len(nz) else audio, SR)
         return out
 
+    def directed_line(self, voice_description: str, line: str, direction: str) -> Path:
+        """Generate an alternate delivery from a human direction without changing the words."""
+        key = hashlib.sha1(f"{voice_description}|{line}|{direction}".encode()).hexdigest()[:12]
+        out = self.cache / f"directed_{key}.wav"
+        if out.exists():
+            return out
+        from .casting import Casting
+
+        prompt = f"{voice_description.strip()}. Delivery direction: {direction.strip()}"
+        seed = SEED + int(key[:8], 16) % 100_000
+        return Casting().design(prompt, line, out, seed=seed)
+
     # ------------------------------------------------------------ timing
 
     @staticmethod
@@ -104,54 +117,89 @@ class Dubber:
 
     # ------------------------------------------------------------ the dub
 
-    def dub(self, performance: list[tuple[str, float, float]], cast_line: Path, line: str, length_s: float) -> Dub:
-        """The cast line re-timed to the performance's words (from `listen`), on a track of length_s seconds."""
+    def timings(self, audio: Path) -> list:
+        """Word timings cached by recording contents, shared across takes and later exports."""
+        digest = hashlib.sha1(audio.read_bytes()).hexdigest()
+        key = (audio, digest)
+        if key in self._timings:
+            return self._timings[key]
+        path = audio.with_suffix(".timing.json")
+        try:
+            saved = json.loads(path.read_text())
+        except (OSError, ValueError):
+            saved = {}
+        if saved.get("sha1") == digest and saved.get("version") == 1:
+            result = saved["words"]
+        else:
+            if self.stt is None:
+                from mlx_audio.stt.utils import load_model
+
+                self.stt = load_model("mlx-community/whisper-large-v3-turbo-asr-fp16")
+            result = listen(self.stt, audio)[1]
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"sha1": digest, "version": 1, "words": result}))
+            tmp.replace(path)
+        self._timings[key] = result
+        return result
+
+    def dub(self, performance: list[tuple[str, float, float]], cast_line: Path, line: str,
+            length_s: float, *, original_audio: Path) -> Dub:
+        """Align the overlay to the words and actual speech activity in the original recording."""
+        from .alignment import align
+
         expected = words(line)
-        if cast_line not in self._timings:
-            self._timings[cast_line] = listen(self.stt, cast_line)[1]
-        target = self._map(expected, performance)
-        source = self._map(expected, self._timings[cast_line])
-        voice, sr = sf.read(cast_line, dtype="float32")
-        if sr != SR:
-            raise DubError(f"cast line must be {SR} Hz")
-        track = np.zeros(int(length_s * SR), dtype=np.float32)
-        found = sum(1 for t, s in zip(target, source) if t and s)
-        if found < max(1, int(0.7 * len(expected))):
-            raise DubError(f"{found} of {len(expected)} words matched")
-        alignment = []
-        first = True
-        for word, t, s in zip(expected, target, source):
-            if not (t and s):
-                continue
-            (t0, t1), (s0, s1) = t, s
-            natural = s1 - s0
-            length = min(max(t1 - t0, natural / MAX_STRETCH), natural * MAX_STRETCH)
-            # Whisper word spans often include the pause before a word; the first word usually carries the
-            # lead-in, so it lines up with the end of its span and the rest line up with their starts.
-            # (When the performance starts speaking at once, that can fall before the clip: start at 0.)
-            start_s = max(0.0, t1 - length) if first else t0
-            first = False
-            piece = _stretch(voice[int(s0 * SR): int(s1 * SR)], length)
-            a = int(start_s * SR)
-            n = max(0, min(len(piece), len(track) - a))
-            track[a: a + n] += piece[:n]
-            alignment.append({"word": word, "said": [round(t0, 2), round(t1, 2)], "placed": [round(start_s, 2), round(start_s + length, 2)],
-                              "stretch": round(natural / max(length, 1e-3), 2)})  # fmt: skip
-        return Dub(np.clip(track, -1, 1), alignment, found)
+        voice = _read_voice(cast_line)
+        original = _read_voice(original_audio)
+
+        def valid(spans, seconds):
+            return [span if span is not None and np.all(np.isfinite(span))
+                    and 0 <= span[0] < span[1] <= seconds + .1 else None for span in spans]
+
+        target = valid(self._map(expected, performance), length_s)
+        if sum(t is not None for t in target) < max(1, int(np.ceil(.7 * len(expected)))):
+            raise DubError("not enough usable timings in the original audio")
+        source = valid(self._map(expected, self.timings(cast_line)), len(voice) / SR)
+        found = sum(s is not None and t is not None for s, t in zip(source, target))
+        if found < max(1, int(np.ceil(.7 * len(expected)))):
+            raise DubError(f"{found} of {len(expected)} words matched between the recordings")
+        try:
+            track, alignment = align(voice, original, source, target, length_s)
+        except ValueError as exc:
+            raise DubError(str(exc)) from exc
+        return Dub(track, alignment, found)
 
     def lay_over(self, cast_line: Path, length_s: float) -> Dub:
-        """Off camera: the cast line as spoken, after a short lead-in."""
-        voice, _ = sf.read(cast_line, dtype="float32")
-        track = np.zeros(int(length_s * SR), dtype=np.float32)
-        a = int(OFF_CAMERA_LEAD_S * SR)
-        n = max(0, min(len(voice), len(track) - a))
-        track[a: a + n] = voice[:n]
-        return Dub(track, [], 0)
+        """Off camera: preserve the complete line, shortening the lead-in if space is tight."""
+        voice = _read_voice(cast_line)
+        natural = len(voice) / SR
+        length = min(natural, length_s)
+        if length <= 0 or length < natural / MAX_STRETCH:
+            raise DubError("the complete cast line cannot fit in this take; use original audio or a longer take")
+        start = min(OFF_CAMERA_LEAD_S, max(0.0, length_s - length))
+        return Dub(_place(voice, start, length, length_s), [], 0)
+
+
+def _read_voice(path: Path) -> np.ndarray:
+    voice, sr = sf.read(path, dtype="float32")
+    if sr != SR or voice.ndim != 1:
+        raise DubError(f"cast line must be {SR} Hz mono")
+    if not len(voice) or not np.all(np.isfinite(voice)):
+        raise DubError("cast line is empty or invalid")
+    return voice
+
+
+def _place(voice: np.ndarray, start: float, length: float, total: float) -> np.ndarray:
+    track = np.zeros(int(round(total * SR)), dtype=np.float32)
+    piece = _stretch(voice, length)
+    a = int(round(start * SR))
+    n = min(len(piece), len(track) - a)
+    track[a:a + n] = piece[:n]
+    return track
 
 
 def _stretch(segment: np.ndarray, target_s: float) -> np.ndarray:
     """Time-stretch to target_s seconds without changing pitch (ffmpeg atempo, chained for big ratios)."""
-    want = int(max(target_s, 0) * SR)
+    want = int(round(max(target_s, 0) * SR))
     if len(segment) < 32 or want == 0:
         return np.zeros(want, dtype=np.float32)
     ratio = (len(segment) / SR) / target_s
@@ -163,12 +211,19 @@ def _stretch(segment: np.ndarray, target_s: float) -> np.ndarray:
         filters.append("atempo=0.5")
         ratio /= 0.5
     filters.append(f"atempo={ratio:.5f}")
-    with tempfile.TemporaryDirectory() as d:
-        src, dst = Path(d) / "in.wav", Path(d) / "out.wav"
-        sf.write(src, segment, SR)
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-af", ",".join(filters), "-ar", str(SR), str(dst)], check=True)
-        out, _ = sf.read(dst, dtype="float32")
-    out = out[:want] if len(out) >= want else np.concatenate([out, np.zeros(want - len(out), dtype=np.float32)])
+    if abs(want - len(segment)) <= 1:
+        out = segment.copy()  # no tempo processing when the natural timing already fits
+    else:
+        with tempfile.TemporaryDirectory() as d:
+            src, dst = Path(d) / "in.wav", Path(d) / "out.wav"
+            # atempo needs look-ahead at EOF. Supply silence beyond the last phoneme so its buffered
+            # tail is flushed, then trim the silence, rather than losing the end of the sentence.
+            padded = np.pad(segment, (0, int(0.15 * SR)))
+            sf.write(src, padded, SR, subtype="FLOAT")
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-af", ",".join(filters),
+                            "-ar", str(SR), "-c:a", "pcm_f32le", str(dst)], check=True)
+            out, _ = sf.read(dst, dtype="float32")
+    out = out[:want] if len(out) >= want else np.pad(out, (0, want - len(out)))
     if len(out) > 2 * FADE:
         ramp = np.linspace(0, 1, FADE, dtype=np.float32)
         out[:FADE] *= ramp

@@ -110,7 +110,22 @@ The first film downloads a few smaller models by itself (speech and voice, about
 
 ![The finished film](docs/images/film.jpg)
 
-Click any shot to see its takes and the checks it passed. You can switch between the character's voice and LTX's original sound.
+Click any shot to see its takes and the checks it passed. You can switch between overlay audio and original audio.
+
+To use a clip's original sound in the exported film, open the shot and set **Audio in exported film** to
+**Original audio** instead of **Overlay audio**. Choices are saved per shot. In the **Film** tab, click **Rebuild film**, then
+**Export MP4** when it finishes. The export is one complete, shareable MP4 containing the full picture
+and soundtrack. Rebuilding reuses the video takes and updates older audio overlays.
+The overlay follows the original recording's speech starts, pauses, and word timing, using continuous
+time stretching within each phrase to keep speech smooth. This improves sync without regenerating
+the video. Exact lip sync still depends on the original performance and timing recognition; choose
+original audio when the two deliveries differ too much to align naturally.
+
+To revise one shot, open it and describe the change under **Generate a new clip**. The studio renders
+new takes for that shot, selects the best result through the same checks, and rebuilds the MP4 without
+rendering the other shots again. For a speaking shot, **Regenerate overlay audio** accepts a delivery
+direction such as “quieter and more hesitant.” The scripted words stay fixed; the new delivery is
+aligned to the timing of the original performance before the film is rebuilt.
 
 ![One shot and its checks](docs/images/shot.jpg)
 

@@ -22,8 +22,9 @@ from . import store
 from .config import PRODUCTIONS, PROJECT
 
 ACTIVE = ("queued", "running", "cancelling")
-KINDS = ("render", "preprod", "audition", "casting")
-FINISHED = {"render": "film_done", "preprod": "run_finished", "audition": "run_finished", "casting": "run_finished"}
+KINDS = ("render", "export", "clip", "overlay", "preprod", "audition", "casting")
+FINISHED = {"render": "film_done", "export": "film_done", "clip": "film_done", "overlay": "film_done",
+            "preprod": "run_finished", "audition": "run_finished", "casting": "run_finished"}
 
 
 def _alive(pid: int | None) -> bool:
@@ -75,17 +76,36 @@ class JobManager:
                 raise HTTPException(404, "no such job")
             return dict(self._jobs[jid])
 
-    def submit(self, pid: str, kind: str = "render", character: str | None = None) -> dict:
+    def submit(self, pid: str, kind: str = "render", character: str | None = None,
+               shot: str | None = None, prompt: str | None = None) -> dict:
         plan, out = store.plan_and_out(pid)
         if kind not in KINDS:
             raise HTTPException(400, f"unknown job kind {kind!r}")
-        if kind in ("render", "audition") and (not plan or not plan.exists()):
+        if kind in ("render", "export", "clip", "overlay", "audition") and (not plan or not plan.exists()):
             raise HTTPException(409, "this production has no shot plan yet")
+        if kind in ("export", "clip", "overlay"):
+            from ..plan import load_plan
+
+            resolved = store._resolved(out)
+            loaded = load_plan(plan)
+            for planned in loaded.shots():
+                res = resolved.get(planned.id)
+                if not res or not Path(res["takes"][res["chosen"]]["path"]).exists():
+                    raise HTTPException(409, "render all shots before rebuilding the film")
+            if kind in ("clip", "overlay"):
+                planned = next((s for s in loaded.shots() if s.id == shot), None)
+                if not planned:
+                    raise HTTPException(404, "no such shot")
+                if not prompt or not 3 <= len(prompt.strip()) <= 600:
+                    raise HTTPException(422, "give an edit direction between 3 and 600 characters")
+                if kind == "overlay" and not (loaded.dubbed and planned.line):
+                    raise HTTPException(422, "this shot has no overlay audio to regenerate")
         if kind == "render" and not store.ready_to_render(pid):
             raise HTTPException(409, "approve the plan, keyframes and voice before rendering")
         if kind == "casting" and not character:
             raise HTTPException(400, "a recast needs the character")
-        work = {"render": out, "preprod": store.preprod_dir(pid), "audition": store.preprod_dir(pid) / "voice",
+        work = {"render": out, "export": out, "clip": out, "overlay": out,
+                "preprod": store.preprod_dir(pid), "audition": store.preprod_dir(pid) / "voice",
                 "casting": store.preprod_dir(pid) / "voices"}[kind]  # fmt: skip
         work.mkdir(parents=True, exist_ok=True)
         with self._lock:
@@ -98,10 +118,17 @@ class JobManager:
                 "error": None, "plan": str(plan.relative_to(PROJECT)) if plan else None,
                 "out": str(work.relative_to(PROJECT)),
                 "log": f"productions/{pid}/jobs/{jid}.log", "summary": None, "character": character,
+                "shot": shot, "prompt": prompt.strip() if prompt else None,
             }  # fmt: skip
             self._jobs[jid] = job
             self._save(job)
         return dict(job)
+
+    def choose_audio(self, pid: str, sid: str, source: str) -> None:
+        with self._lock:
+            if any(j["production"] == pid and j["status"] in ACTIVE for j in self._jobs.values()):
+                raise HTTPException(409, "wait for the current job before changing audio")
+            store.choose_audio(pid, sid, source)
 
     def cancel(self, jid: str) -> dict:
         with self._lock:
@@ -157,6 +184,11 @@ class JobManager:
     def _spawn(self, job: dict) -> None:
         task = {
             "render": ["-m", "storyvid.pipeline", str(PROJECT / (job["plan"] or "")), "--out", str(PROJECT / job["out"])],
+            "export": ["-m", "storyvid.pipeline", str(PROJECT / (job["plan"] or "")), "--out", str(PROJECT / job["out"]), "--assemble-only"],
+            "clip": ["-m", "storyvid.pipeline", str(PROJECT / (job["plan"] or "")), "--out", str(PROJECT / job["out"]),
+                     "--edit-shot", job["shot"], "--direction", job["prompt"]],
+            "overlay": ["-m", "storyvid.pipeline", str(PROJECT / (job["plan"] or "")), "--out", str(PROJECT / job["out"]),
+                        "--edit-overlay", job["shot"], "--direction", job["prompt"]],
             "preprod": ["-m", "storyvid.agents", "preprod", job["production"]],
             "audition": ["-m", "storyvid.audition", job["production"]],
             "casting": ["-m", "storyvid.casting", "recast", job["production"], job.get("character") or ""],
@@ -170,6 +202,8 @@ class JobManager:
         self._save(job)
         if job["kind"] == "render":
             store.set_step(job["production"], "render", "running")
+        elif job["kind"] == "export":
+            store.set_step(job["production"], "assemble", "running")
         elif job["kind"] in ("audition", "casting"):
             store.set_step(job["production"], "voice", "running")
 
@@ -196,10 +230,15 @@ class JobManager:
                 f"render process exited with code {code}" if code is not None else
                 "render process ended while the studio was not running"
             )  # fmt: skip
-        summary = store.progress(events) if job.get("kind", "render") == "render" else store.agent_progress(events)
+        summary = store.progress(events) if job.get("kind", "render") in ("render", "export", "clip", "overlay") else store.agent_progress(events)
         job.update(status=status, ended=time.time(), returncode=code, summary=summary)
         self._procs.pop(job["id"], None)
         self._save(job)
+        if job.get("kind") in ("export", "clip", "overlay"):
+            store.set_step(job["production"], "assemble", "done" if status != "failed" else "failed")
+            if status == "succeeded":
+                store.set_step(job["production"], "film", "done")
+            return
         if job.get("kind", "render") != "render":
             # Agents set their own stages as they work; a failure lands on whichever stage was running.
             if status != "succeeded":

@@ -77,7 +77,11 @@ export interface Take {
   speaker_note?: string | null;
   /** Dubbed films: the take's picture with the cast voice, and how many words were timed to the lips. */
   dub?: string | null;
+  dub_revision?: number | null;
   dub_words?: string | null;
+  /** Human directions used to generate this video take and its current overlay. */
+  edit_prompt?: string | null;
+  audio_prompt?: string | null;
 }
 
 export interface Shot {
@@ -90,6 +94,8 @@ export interface Shot {
   /** Who says the line; the character in frame unless it is delivered off camera. */
   speaker: string | null;
   delivery: "on" | "off";
+  audio_source: "cast" | "original";
+  has_cast_audio: boolean;
   action: string;
   camera: string;
   seconds: number | null;
@@ -127,6 +133,9 @@ export interface FilmMarker {
 
 export interface Film {
   path: string;
+  revision: number;
+  audio_pending: boolean;
+  audio_upgrade: boolean;
   duration: number | null;
   markers: FilmMarker[];
   report: string | null;
@@ -343,6 +352,25 @@ export const api = {
     request<Production>("/api/productions", { method: "POST", body: form }),
   deleteProduction: (id: string) => request<{ deleted: string }>(`/api/productions/${id}`, { method: "DELETE" }),
   startRender: (id: string) => request<Job>(`/api/productions/${id}/jobs?kind=render`, { method: "POST" }),
+  rebuildFilm: (id: string) => request<Job>(`/api/productions/${id}/jobs?kind=export`, { method: "POST" }),
+  chooseAudio: (id: string, shot: string, source: "cast" | "original") =>
+    request<Production>(`/api/productions/${id}/shots/${shot}/audio`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source }),
+    }),
+  regenerateShot: (id: string, shot: string, prompt: string) =>
+    request<Job>(`/api/productions/${id}/shots/${shot}/regenerate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    }),
+  regenerateOverlay: (id: string, shot: string, prompt: string) =>
+    request<Job>(`/api/productions/${id}/shots/${shot}/regenerate-overlay`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    }),
   startJob: (id: string, kind: "render" | "preprod" | "audition") =>
     request<Job>(`/api/productions/${id}/jobs?kind=${kind}`, { method: "POST" }),
   recastVoice: (id: string, character: string, description: string, text: string) =>

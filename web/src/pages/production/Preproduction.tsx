@@ -44,7 +44,7 @@ export function NextStep({ p }: { p: Production }) {
   } else if (job && job.kind === "casting") {
     body = (
       <Callout tone="live" icon={<Mic className="size-4" />} eyebrow="Voice casting" title="Designing a new voice">
-        <p className="mt-2 text-[12.5px] text-fg-3">Qwen3-TTS is speaking the reference text in the new voice. About 20 seconds.</p>
+        <p className="mt-2 text-[12.5px] text-fg-3">Generating a preview of the reference text in the new voice. About 20 seconds.</p>
       </Callout>
     );
   } else if (job && job.kind === "audition") {

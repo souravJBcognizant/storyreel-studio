@@ -216,8 +216,8 @@ function ShotNode({ data }: NodeProps<Node<ShotData>>) {
             <>
               <ScoreChip metric="words" value={chosen.wer} />
               {chosen.dub_words && (
-                <span title="Words of the cast voice placed on the lip movements" className="inline-flex h-[22px] items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 font-mono text-[10.5px] text-fg-2">
-                  <span className="font-sans text-fg-3">Lips</span> {chosen.dub_words}
+                <span title="Words matched between the original and overlay recordings to align their timing" className="inline-flex h-[22px] items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 font-mono text-[10.5px] text-fg-2">
+                  <span className="font-sans text-fg-3">Timing</span> {chosen.dub_words}
                 </span>
               )}
             </>

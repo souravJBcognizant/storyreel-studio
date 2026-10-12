@@ -1,27 +1,60 @@
 import * as Dialog from "@radix-ui/react-dialog";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Check, Crown, Mic, MicOff, X } from "lucide-react";
+import { AudioLines, Check, Clapperboard, Crown, Mic, MicOff, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Scene, Shot, Take } from "../lib/api";
-import { mediaUrl, thumbUrl } from "../lib/api";
+import { api, mediaUrl, thumbUrl } from "../lib/api";
 import { duration } from "../lib/format";
-import { ScoreChip, StatusPill } from "./ui";
+import { Button, ScoreChip, StatusPill } from "./ui";
 import { VideoPlayer } from "./VideoPlayer";
 
 export function ShotDrawer({
   shot,
   scene,
+  productionId,
+  busy,
   onClose,
 }: {
   shot: Shot | null;
   scene: Scene | null;
+  productionId: string;
+  busy: boolean;
   onClose: () => void;
 }) {
   const [takeIndex, setTakeIndex] = useState<number | null>(null);
   const [original, setOriginal] = useState(false); // dubbed takes: hear LTX's own voice instead of the cast voice
+  const [clipPrompt, setClipPrompt] = useState("");
+  const [audioPrompt, setAudioPrompt] = useState("");
+  const qc = useQueryClient();
+  const choice = useMutation({
+    mutationFn: ({ id, source }: { id: string; source: "cast" | "original" }) => api.chooseAudio(productionId, id, source),
+    onSuccess: (p) => qc.setQueryData(["production", productionId], p),
+  });
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ["production", productionId] });
+    void qc.invalidateQueries({ queryKey: ["jobs"] });
+  };
+  const regenerateClip = useMutation({
+    mutationFn: () => api.regenerateShot(productionId, shot!.id, clipPrompt.trim()),
+    onSuccess: refresh,
+  });
+  const regenerateAudio = useMutation({
+    mutationFn: () => api.regenerateOverlay(productionId, shot!.id, audioPrompt.trim()),
+    onSuccess: refresh,
+  });
+  const editPending = regenerateClip.isPending || regenerateAudio.isPending;
+  useEffect(() => {
+    setOriginal(shot?.audio_source === "original");
+    setClipPrompt("");
+    setAudioPrompt("");
+    choice.reset();
+    regenerateClip.reset();
+    regenerateAudio.reset();
+  }, [shot?.id, shot?.audio_source]);
   useEffect(() => setTakeIndex(shot?.chosen ?? (shot?.takes.length ? shot.takes.length - 1 : null)), [shot?.id, shot?.chosen, shot?.takes.length]);
   const take = shot && takeIndex != null ? shot.takes.find((t) => t.index === takeIndex) ?? null : null;
-  const src = take ? (take.dub && !original ? take.dub : take.path) : null;
+  const src = take ? (take.dub && !original ? `${mediaUrl(take.dub)}?v=${take.dub_revision ?? 0}` : mediaUrl(take.path)) : null;
 
   return (
     <Dialog.Root open={!!shot} onOpenChange={(open) => !open && onClose()}>
@@ -51,7 +84,7 @@ export function ShotDrawer({
 
               <div className="flex-1 overflow-y-auto px-6 py-5">
                 {take && src ? (
-                  <VideoPlayer key={src} src={mediaUrl(src)} poster={thumbUrl(take.path, 0.5, 960)} className="aspect-[3/2] w-full" autoPlay />
+                  <VideoPlayer key={src} src={src} poster={thumbUrl(take.path, 0.5, 960)} className="aspect-[3/2] w-full" autoPlay />
                 ) : (
                   <div className="skeleton aspect-[3/2] w-full" />
                 )}
@@ -59,12 +92,13 @@ export function ShotDrawer({
                   <div className="mt-3 flex items-center gap-3">
                     <div className="inline-flex rounded-lg border border-white/[0.08] bg-ink-850 p-0.5 text-[12px]">
                       {[
-                        { on: false, icon: <Mic className="size-3.5" />, label: shot.delivery === "off" ? "Cast voice, laid over" : "Cast voice, dubbed" },
-                        { on: true, icon: <MicOff className="size-3.5" />, label: "LTX original" },
+                        { on: false, icon: <Mic className="size-3.5" />, label: "Overlay audio" },
+                        { on: true, icon: <MicOff className="size-3.5" />, label: "Original audio" },
                       ].map((o) => (
                         <button
                           key={o.label}
                           onClick={() => setOriginal(o.on)}
+                          aria-pressed={original === o.on}
                           className={clsx(
                             "inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 transition-colors",
                             original === o.on ? "bg-white/[0.08] text-fg" : "text-fg-3 hover:text-fg-2",
@@ -75,8 +109,30 @@ export function ShotDrawer({
                       ))}
                     </div>
                     <span className="text-[11.5px] text-fg-4">
-                      {shot.delivery === "off" ? "Heard off screen over this picture." : "The cast voice, word by word on LTX's lip movements."}
+                      Preview audio
                     </span>
+                  </div>
+                )}
+
+                {shot.has_cast_audio && shot.chosen != null && (
+                  <div className="mt-4 rounded-lg border border-white/[0.08] bg-ink-850 p-3">
+                    <label className="flex items-center justify-between gap-3 text-[12px] text-fg-2">
+                      Audio in exported film
+                      <select
+                        aria-label="Audio in exported film"
+                        value={shot.audio_source}
+                        disabled={busy || choice.isPending || editPending}
+                        onChange={(e) => choice.mutate({ id: shot.id, source: e.target.value as "cast" | "original" })}
+                        className="rounded-md border border-white/10 bg-ink-900 px-3 py-2 text-fg disabled:opacity-50"
+                      >
+                        <option value="cast">Overlay audio</option>
+                        <option value="original">Original audio</option>
+                      </select>
+                    </label>
+                    <p className="mt-2 text-[11.5px] text-fg-3">
+                      {choice.isPending ? "Saving…" : `Saved for this shot’s chosen take (${shot.chosen + 1}). Rebuild the film in the Film tab to apply your choices.`}
+                    </p>
+                    {choice.error && <p role="alert" className="mt-2 text-[12px] text-bad">{choice.error.message}</p>}
                   </div>
                 )}
 
@@ -89,6 +145,58 @@ export function ShotDrawer({
                   )}
                   {shot.camera && <p className="text-fg-3">{shot.camera}</p>}
                 </div>
+
+                {shot.chosen != null && (
+                  <div className="mt-6 grid gap-3 sm:grid-cols-2">
+                    <form
+                      className="rounded-xl border border-white/[0.08] bg-ink-850 p-3"
+                      onSubmit={(e) => { e.preventDefault(); if (clipPrompt.trim().length >= 3) regenerateClip.mutate(); }}
+                    >
+                      <div className="flex items-center gap-2 text-[12.5px] font-medium text-fg">
+                        <Clapperboard className="size-4 text-amber" /> Generate a new clip
+                      </div>
+                      <p className="mt-1 text-[11.5px] leading-relaxed text-fg-3">Describe what should change. A new take is generated and the film is rebuilt.</p>
+                      <textarea
+                        aria-label="Direction for new clip"
+                        value={clipPrompt}
+                        onChange={(e) => setClipPrompt(e.target.value)}
+                        maxLength={600}
+                        rows={3}
+                        placeholder="Make the gesture smaller and hold eye contact with the audience."
+                        className="mt-3 w-full resize-y rounded-lg border border-white/10 bg-ink-900 px-3 py-2 text-[12px] leading-relaxed text-fg outline-none placeholder:text-fg-4 focus:border-amber/50"
+                      />
+                      <Button type="submit" size="sm" className="mt-2 w-full" loading={regenerateClip.isPending} disabled={busy || editPending || clipPrompt.trim().length < 3}>
+                        Generate clip
+                      </Button>
+                      {regenerateClip.error && <p role="alert" className="mt-2 text-[11.5px] text-bad">{regenerateClip.error.message}</p>}
+                    </form>
+
+                    {shot.has_cast_audio && (
+                      <form
+                        className="rounded-xl border border-white/[0.08] bg-ink-850 p-3"
+                        onSubmit={(e) => { e.preventDefault(); if (audioPrompt.trim().length >= 3) regenerateAudio.mutate(); }}
+                      >
+                        <div className="flex items-center gap-2 text-[12.5px] font-medium text-fg">
+                          <AudioLines className="size-4 text-amber" /> Regenerate overlay audio
+                        </div>
+                        <p className="mt-1 text-[11.5px] leading-relaxed text-fg-3">Describe the delivery. The scripted words stay unchanged and the result is synced to the original performance.</p>
+                        <textarea
+                          aria-label="Direction for overlay audio"
+                          value={audioPrompt}
+                          onChange={(e) => setAudioPrompt(e.target.value)}
+                          maxLength={600}
+                          rows={3}
+                          placeholder="Quieter and more hesitant, with a longer pause before the final sentence."
+                          className="mt-3 w-full resize-y rounded-lg border border-white/10 bg-ink-900 px-3 py-2 text-[12px] leading-relaxed text-fg outline-none placeholder:text-fg-4 focus:border-amber/50"
+                        />
+                        <Button type="submit" size="sm" className="mt-2 w-full" loading={regenerateAudio.isPending} disabled={busy || editPending || audioPrompt.trim().length < 3}>
+                          Generate audio
+                        </Button>
+                        {regenerateAudio.error && <p role="alert" className="mt-2 text-[11.5px] text-bad">{regenerateAudio.error.message}</p>}
+                      </form>
+                    )}
+                  </div>
+                )}
 
                 <h4 className="eyebrow mt-6 mb-2">Takes</h4>
                 <div className="flex flex-col gap-2">
@@ -178,15 +286,17 @@ function TakeRow({ take, shot, chosen, active, onPick }: { take: Take; shot: Sho
             </span>
           )}
           {take.dub_words && (
-            <span title="Words of the cast voice placed on LTX's lip movements" className="inline-flex h-[22px] items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 font-mono text-[10.5px] text-fg-2">
-              <span className="font-sans text-fg-3">Lips</span> {take.dub_words}
+            <span title="Words matched between the original and overlay recordings to align their timing" className="inline-flex h-[22px] items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 font-mono text-[10.5px] text-fg-2">
+              <span className="font-sans text-fg-3">Timing</span> {take.dub_words}
             </span>
           )}
           <ScoreChip metric="voice" value={take.voice} info={dubbed} />
           {shot.identity_check && <ScoreChip metric="identity" value={take.identity} info={dubbed} />}
           <ScoreChip metric="continuity" value={take.continuity} info={dubbed} />
         </div>
-        {take.heard && <div className="mt-1 truncate text-[11px] text-fg-3">{dubbed ? "LTX said" : "Heard"}: “{take.heard}”</div>}
+        {take.heard && <div className="mt-1 truncate text-[11px] text-fg-3">{dubbed ? "Original speech" : "Heard"}: “{take.heard}”</div>}
+        {take.edit_prompt && <div className="mt-1 line-clamp-2 text-[11px] text-fg-3">Clip direction: “{take.edit_prompt}”</div>}
+        {take.audio_prompt && <div className="mt-1 line-clamp-2 text-[11px] text-fg-3">Audio direction: “{take.audio_prompt}”</div>}
       </div>
       <div className="shrink-0 text-right font-mono text-[10.5px] text-fg-3">
         <div>{take.seconds.toFixed(1)} s</div>

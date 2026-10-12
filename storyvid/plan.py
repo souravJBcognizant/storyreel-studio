@@ -5,8 +5,7 @@ A shot starts one of three ways:
   continue — starts from the last frame of an earlier shot (`from`, default: the previous shot)
   anchor   — starts from a given still (`image`), e.g. the speaker's close-up keyframe
 
-A line is delivered on camera (LTX performs it, then the speaker's cast voice is dubbed over it word by
-word) or off camera (the picture shows someone listening, or no one, and the cast voice is laid over it).
+A line is delivered on camera (LTX performs it, then the speaker's cast voice is dubbed over it as a continuous line) or off camera (the picture shows someone listening, or no one, and the cast voice is laid over it).
 `character` is who is in the frame and `speaker` who says the line; on camera they are the same person.
 A plan is dubbed when every speaking character has a cast voice; older plans keep LTX's own voice.
 """

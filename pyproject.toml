@@ -13,6 +13,7 @@ dependencies = [
     "pillow>=12.3.0",
     "python-dotenv>=1.2.4",
     "python-multipart>=0.0.32",
+    "pytsmod>=0.3.8,<0.4",
     "resemblyzer>=0.1.4",
     "setuptools<81",
     "soundfile>=0.14.0",

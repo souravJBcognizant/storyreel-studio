@@ -107,7 +107,7 @@ export const ENGINE: Record<Engine, { label: string; color: string; text: string
   claude: { label: "Claude", color: "var(--color-engine-claude)", text: "text-engine-claude" },
   openai: { label: "OpenAI", color: "var(--color-engine-openai)", text: "text-engine-openai" },
   ltx: { label: "LTX · local", color: "var(--color-engine-ltx)", text: "text-engine-ltx" },
-  qwen: { label: "Qwen · local", color: "var(--color-engine-qwen)", text: "text-engine-qwen" },
+  qwen: { label: "Voice generation · local", color: "var(--color-engine-qwen)", text: "text-engine-qwen" },
   ffmpeg: { label: "ffmpeg", color: "var(--color-engine-ffmpeg)", text: "text-engine-ffmpeg" },
   user: { label: "You", color: "var(--color-engine-user)", text: "text-engine-user" },
 };
@@ -118,7 +118,7 @@ export function EngineTag({ engine, model, className }: { engine: Engine; model?
     <span className={clsx("inline-flex min-w-0 items-center gap-1.5 text-[11px] text-fg-3", className)}>
       <span className="size-1.5 shrink-0 rounded-[2px]" style={{ background: e.color }} />
       <span className={clsx("font-medium", e.text)}>{e.label}</span>
-      {model && <span className="truncate font-mono text-[10.5px] text-fg-4">{model}</span>}
+      {model && engine !== "qwen" && <span className="truncate font-mono text-[10.5px] text-fg-4">{model}</span>}
     </span>
   );
 }

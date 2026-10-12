@@ -7,6 +7,7 @@ The React app (web/) proxies /api and /media here; a production build is served 
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -93,6 +94,32 @@ def approve(pid: str, stage: str):
 @app.post("/api/productions/{pid}/jobs")
 def start_job(pid: str, kind: str = "render"):
     return jobs.submit(pid, kind)
+
+
+class AudioChoice(BaseModel):
+    source: Literal["cast", "original"]
+
+
+@app.put("/api/productions/{pid}/shots/{sid}/audio")
+def choose_audio(pid: str, sid: str, body: AudioChoice):
+    jobs.choose_audio(pid, sid, body.source)
+    return store.detail(pid, jobs.all())
+
+
+class EditPrompt(BaseModel):
+    prompt: str
+
+
+@app.post("/api/productions/{pid}/shots/{sid}/regenerate")
+def regenerate_shot(pid: str, sid: str, body: EditPrompt):
+    """Generate a new take from a human direction and rebuild the finished film."""
+    return jobs.submit(pid, "clip", shot=sid, prompt=body.prompt)
+
+
+@app.post("/api/productions/{pid}/shots/{sid}/regenerate-overlay")
+def regenerate_overlay(pid: str, sid: str, body: EditPrompt):
+    """Generate a directed delivery for the scripted line, align it, and rebuild the film."""
+    return jobs.submit(pid, "overlay", shot=sid, prompt=body.prompt)
 
 
 class Recast(BaseModel):

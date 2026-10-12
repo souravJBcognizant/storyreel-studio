@@ -69,7 +69,7 @@ function JobDetail({ job, p, onCancel }: { job: Job; p: Production; onCancel: ()
       <section className="card p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="eyebrow">{job.kind === "preprod" ? "Pre-production job" : job.kind === "audition" ? "Voice audition" : "Render job"}</div>
+            <div className="eyebrow">{job.kind === "export" ? "Rebuild film" : job.kind === "clip" ? "Generate clip" : job.kind === "overlay" ? "Generate overlay audio" : job.kind === "preprod" ? "Pre-production job" : job.kind === "audition" ? "Voice audition" : "Render job"}</div>
             <div className="mt-1 flex items-center gap-2.5 font-mono text-[14px] text-fg">
               {job.id} <StatusPill status={job.status} />
             </div>

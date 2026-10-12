@@ -40,6 +40,7 @@ class Placed:
     voice: np.ndarray | None = None  # dubbed or laid-over line on the take's timeline, 24 kHz mono
     native: bool = True  # dubbed films: keep this shot's own sound (False: it holds LTX's voice)
     bed_source: bool = False  # this shot's sound becomes its scene's ambience
+    original_dialogue: bool = False  # keep original speech audible, not levelled down to room tone
 
 
 def decode(path: Path) -> np.ndarray:
@@ -148,7 +149,7 @@ def _scene(mix: np.ndarray, shots: list[Placed], last: bool) -> None:
         if p.native:
             own = _own_sound(p)
             db = level_db(own)
-            if ref_db is not None and db is not None:  # pull it to within NATIVE_RANGE_DB of the scene's ambience
+            if not p.original_dialogue and ref_db is not None and db is not None:  # pull it to within NATIVE_RANGE_DB of the scene's ambience
                 own = own * _gain(min(max(db, ref_db - NATIVE_RANGE_DB), ref_db + NATIVE_RANGE_DB) - db)
             _add(mix, _fade(own, max(p.fade_in, MIN_FADE_S), max(p.fade_out, MIN_FADE_S)), p.start)
         if p.voice is not None:
