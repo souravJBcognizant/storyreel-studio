@@ -330,6 +330,17 @@ export interface FileRoot {
 
 export interface Settings {
   mode: "full" | "local";
+  editable: {
+    anthropic_key_set: boolean;
+    openai_key_set: boolean;
+    claude_model: string;
+    claude_routine_model: string;
+    openai_image_model: string;
+    ollama_base_url: string;
+    ollama_model: string;
+    ollama_timeout_seconds: number;
+    ollama_vision_model: string;
+  };
   providers: {
     language: { name: string; provider: string; configured: boolean; env_var: string; model: string; routine_model: string; role: string };
     vision: { name: string; provider: string; configured: boolean; env_var: string; model: string | null; role: string };
@@ -343,6 +354,21 @@ export interface Settings {
     model_gb: number;
   };
   machine: { chip: string; memory_gb: number | null; os: string };
+}
+
+export interface SettingsUpdate {
+  mode: "full" | "local";
+  anthropic_api_key?: string;
+  clear_anthropic_api_key?: boolean;
+  claude_model: string;
+  claude_routine_model: string;
+  openai_api_key?: string;
+  clear_openai_api_key?: boolean;
+  openai_image_model: string;
+  ollama_base_url: string;
+  ollama_model: string;
+  ollama_timeout_seconds: number;
+  ollama_vision_model: string;
 }
 
 export interface PipelineEvent {
@@ -378,6 +404,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   settings: () => request<Settings>("/api/settings"),
+  saveSettings: (settings: SettingsUpdate) => request<Settings>("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  }),
+  reloadSettings: () => request<Settings>("/api/settings/reload", { method: "POST" }),
   agentNetwork: () => request<AgentNetwork>("/api/agents/network"),
   productions: () => request<ProductionSummary[]>("/api/productions"),
   production: (id: string) => request<Production>(`/api/productions/${id}`),

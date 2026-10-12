@@ -43,7 +43,8 @@ def vision_provider() -> str:
 
 def vision_model() -> str:
     if vision_provider() == "ollama":
-        return os.environ.get("OLLAMA_VISION_MODEL", os.environ.get("OLLAMA_MODEL", "")).strip()
+        # Do not send images to a text-only planning model by accident. Vision is opt-in.
+        return os.environ.get("OLLAMA_VISION_MODEL", "").strip()
     return os.environ.get("CLAUDE_MODEL", "claude-opus-5")  # read per call: the pipeline loads .env after import
 
 

@@ -21,48 +21,38 @@ from ..dub import DUB_VERSION
 from ..edit import audio_source, load_choices, load_edit, save_choice
 from ..media import first_frame, last_frame
 from ..plan import load_plan
-from .config import (
-    IMAGE_ENGINE,
-    IMAGE_MODEL,
-    LLM_ENGINE,
-    LLM_MODEL,
-    LLM_MODEL_ROUTINE,
-    LOCAL_MODE,
-    PRODUCTIONS,
-    PROJECT,
-    VISION_ENGINE,
-    VISION_MODEL,
-)
+from . import config
+from .config import PRODUCTIONS, PROJECT
 from .files import media_duration, to_virtual
 
 FPS = 24
 
-# The full pipeline, in order. `checkpoint` stages wait for the user's approval.
-STAGES = [
-    {"key": "story", "label": "Story & reference frames", "owner": "You", "engine": "user",
-     "detail": "Upload an opening frame, optional guide and final frames, and write the story"},
-    {"key": "analysis", "label": "Story analysis", "owner": "StoryAnalyst", "engine": LLM_ENGINE, "model": LLM_MODEL,
-     "detail": "Reads the written story: characters, look, voice and tone" if LOCAL_MODE else
-               "Reads the story and the first frame: characters, look, voice, tone"},
-    {"key": "plan", "label": "Screenplay & shots", "owner": "Screenwriter · ShotPlanner", "engine": LLM_ENGINE,
-     "model": LLM_MODEL, "checkpoint": True, "detail": "Scenes, dialogue and a shot plan you approve"},
-    {"key": "sheets", "label": "Character & prop sheets", "owner": "KeyframeArtist", "engine": IMAGE_ENGINE,
-     "model": IMAGE_MODEL or "Image model", "detail": "Reference sheets that lock the look"},
-    {"key": "keyframes", "label": "Coverage keyframes", "owner": "KeyframeArtist", "engine": IMAGE_ENGINE,
-     "model": IMAGE_MODEL or "Image model", "checkpoint": True,
-     "detail": "Per scene: an establishing frame and a close-up of everyone who speaks, reviewed against the sheets"},
-    {"key": "voice", "label": "Voice casting", "owner": "CastingDirector", "engine": "qwen",
-     "model": "Qwen3-TTS VoiceDesign (local)", "checkpoint": True,
-     "detail": "Each speaking character's voice, designed once; every line is spoken in it"},
-    {"key": "render", "label": "Render & QA", "owner": "ProductionManager", "engine": "ltx",
-     "model": "LTX-2.5 (local)",
-     "detail": "Every take checked locally for words and voice timing; visual QA is unavailable" if LOCAL_MODE else
-               f"Every take checked: the words, who is talking ({VISION_ENGINE}), and the cast voice timed to the performance"},
-    {"key": "assemble", "label": "Edit", "owner": "Editor", "engine": "ffmpeg", "model": "ffmpeg",
-     "detail": "Cut, fades, scene ambience under the voices, loudness"},
-    {"key": "film", "label": "Film", "owner": "You", "engine": "user", "detail": "Watch, download, share"},
-]
-ROUTINE_MODEL = LLM_MODEL_ROUTINE
+def _stages() -> list[dict]:
+    """The pipeline with the currently selected provider profile."""
+    return [
+        {"key": "story", "label": "Story & reference frames", "owner": "You", "engine": "user",
+         "detail": "Upload an opening frame, optional guide and final frames, and write the story"},
+        {"key": "analysis", "label": "Story analysis", "owner": "StoryAnalyst", "engine": config.LLM_ENGINE, "model": config.LLM_MODEL,
+         "detail": "Reads the written story: characters, look, voice and tone" if config.LOCAL_MODE else
+                   "Reads the story and the first frame: characters, look, voice, tone"},
+        {"key": "plan", "label": "Screenplay & shots", "owner": "Screenwriter · ShotPlanner", "engine": config.LLM_ENGINE,
+         "model": config.LLM_MODEL, "checkpoint": True, "detail": "Scenes, dialogue and a shot plan you approve"},
+        {"key": "sheets", "label": "Character & prop sheets", "owner": "KeyframeArtist", "engine": config.IMAGE_ENGINE,
+         "model": config.IMAGE_MODEL or "Image model", "detail": "Reference sheets that lock the look"},
+        {"key": "keyframes", "label": "Coverage keyframes", "owner": "KeyframeArtist", "engine": config.IMAGE_ENGINE,
+         "model": config.IMAGE_MODEL or "Image model", "checkpoint": True,
+         "detail": "Per scene: an establishing frame and a close-up of everyone who speaks, reviewed against the sheets"},
+        {"key": "voice", "label": "Voice casting", "owner": "CastingDirector", "engine": "qwen",
+         "model": "Qwen3-TTS VoiceDesign (local)", "checkpoint": True,
+         "detail": "Each speaking character's voice, designed once; every line is spoken in it"},
+        {"key": "render", "label": "Render & QA", "owner": "ProductionManager", "engine": "ltx",
+         "model": "LTX-2.5 (local)",
+         "detail": "Every take checked locally for words and voice timing; visual QA is unavailable" if config.LOCAL_MODE else
+                   f"Every take checked: the words, who is talking ({config.VISION_ENGINE}), and the cast voice timed to the performance"},
+        {"key": "assemble", "label": "Edit", "owner": "Editor", "engine": "ffmpeg", "model": "ffmpeg",
+         "detail": "Cut, fades, scene ambience under the voices, loudness"},
+        {"key": "film", "label": "Film", "owner": "You", "engine": "user", "detail": "Watch, download, share"},
+    ]
 
 
 def slugify(title: str) -> str:
@@ -106,7 +96,7 @@ def register(pid: str, title: str, story: str, first_frame: str, plan: str, out:
     prod = {
         "id": pid, "title": title, "created": now, "updated": now, "source": source, "story": story,
         "first_frame": first_frame, "plan": plan, "out": out, "target_seconds": target_seconds,
-        "steps": {s["key"]: "pending" for s in STAGES} | steps,
+        "steps": {s["key"]: "pending" for s in _stages()} | steps,
     }  # fmt: skip
     _write(prod)
     return prod
@@ -226,7 +216,7 @@ def create(title: str, story: str, frame_name: str, frame_bytes: bytes, target_s
         "plan": None,
         "out": f"productions/{pid}/out",
         "target_seconds": target_seconds,
-        "steps": {s["key"]: "pending" for s in STAGES} | {"story": "done"},
+        "steps": {s["key"]: "pending" for s in _stages()} | {"story": "done"},
     }
     _write(prod)
     return prod
@@ -1051,13 +1041,13 @@ def detail(pid: str, jobs: list[dict]) -> dict:
         steps["render"] = "running" if active["status"] != "queued" else "queued"
     if editing:
         steps["assemble"] = "running" if active["status"] != "queued" else "queued"
-    stages = [{**stage, "status": steps.get(stage["key"], "pending")} for stage in STAGES]
+    stages = [{**stage, "status": steps.get(stage["key"], "pending")} for stage in _stages()]
     if prod.get("story_mode") == "ai":
         story_stage = next(stage for stage in stages if stage["key"] == "story")
         story_stage.update({
             "owner": "Storyteller",
-            "engine": VISION_ENGINE if prod.get("story_uses_images") else LLM_ENGINE,
-            "model": VISION_MODEL if prod.get("story_uses_images") else LLM_MODEL,
+            "engine": config.VISION_ENGINE if prod.get("story_uses_images") else config.LLM_ENGINE,
+            "model": config.VISION_MODEL if prod.get("story_uses_images") else config.LLM_MODEL,
             "detail": prod.get("story_note") or "Invented the title and story from the creative direction",
         })
     return {

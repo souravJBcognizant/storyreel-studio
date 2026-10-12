@@ -65,55 +65,14 @@ cd ltx-2-mlx && git checkout bfa5755 && uv sync --all-extras && cd ..
    ```
    You can follow the progress in `models/download-ltx.log`.
 
-### Step 6. Choose full mode or local mode
-
-#### Full mode (default)
+### Step 6. Create the local settings file
 
 ```bash
 cp .env.example .env
-open -e .env
 ```
 
-Paste your keys after `ANTHROPIC_API_KEY=` and `OPENAI_API_KEY=`, then save the file.
-The `.env` file stays on your Mac. It is never uploaded to GitHub.
-
-Full mode uses the existing Claude and OpenAI defaults and includes first-frame inspection, reference
-sheets, generated coverage keyframes and visual speaker checks.
-
-#### Local mode (no model API keys)
-
-Local mode keeps project creation, story planning, screenplay and shot-plan generation, local voice
-casting, rendering and editing on the laptop. It deliberately skips features the installed text-only
-LLM cannot perform: first-frame inspection, reference-sheet and keyframe generation, and visual QA.
-Shots start from written character descriptions instead of generated keyframes, so visual continuity
-will usually be weaker than in full mode.
-
-Install and start Ollama, make sure your model appears in `ollama list`, then put this in `.env`:
-
-```dotenv
-LOCAL_MODE=true
-LLM_PROVIDER=ollama
-OLLAMA_BASE_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=hf.co/unsloth/Qwen3-4B-Instruct-2507-GGUF:UD-Q4_K_XL
-OLLAMA_TIMEOUT_SECONDS=600
-
-# Keep cloud credentials commented in local mode.
-# ANTHROPIC_API_KEY=your-existing-key
-# OPENAI_API_KEY=your-existing-key
-
-# This Qwen model is text-only; local mode marks these features unavailable.
-VISION_PROVIDER=ollama
-OLLAMA_VISION_MODEL=
-IMAGE_PROVIDER=local
-LOCAL_IMAGE_BASE_URL=
-LOCAL_IMAGE_MODEL=
-```
-
-The model name must exactly match `ollama list`. The example above is the Qwen model used by the
-original developer machine; use your own installed tag on another laptop.
-
-To return to the existing full workflow, set `LOCAL_MODE=false` (or remove it), remove the local
-provider overrides, and uncomment the two API keys. Cloud mode remains the code default.
+The `.env` file stays on your Mac and is never uploaded to GitHub. The studio can safely edit its provider
+settings after it starts; existing API keys are never sent back to the browser.
 
 ### Step 7. Start the studio
 
@@ -122,6 +81,20 @@ scripts/dev.sh
 ```
 
 Open **http://localhost:5288** in your browser. Press `Ctrl+C` in the terminal to stop it.
+
+Open **Settings** in the left sidebar and choose a mode:
+
+- **Online** is the default. Enter the Anthropic and OpenAI API keys, optionally change the Claude and
+  image model names, then click **Save & reload**. This mode includes image inspection, reference sheets,
+  generated coverage keyframes and visual speaker checks.
+- **Local Ollama** keeps planning on the laptop. Start Ollama, confirm the exact installed model tag with
+  `ollama list`, enter its address and model name, then click **Save & reload**. A text-only model deliberately
+  skips image inspection, reference-sheet and keyframe generation, and visual QA. An optional multimodal
+  model can be entered separately for image inspection.
+
+Switching modes preserves the other profile, so you can move between Online and Local without re-entering
+saved keys. New jobs use the newly selected mode immediately; jobs already running keep the settings they
+started with. If you edit `.env` by hand, click **Reload from .env**. A server restart is not required.
 
 The first film downloads a few smaller models by itself (speech and voice, about 10 GB).
 
@@ -239,8 +212,8 @@ but it is not feature-equivalent to the default full mode.
 ## If something goes wrong
 
 - **The model download says 403:** you have not accepted the license yet (Step 5.1).
-- **The Settings page says a key is missing:** check `.env`, then stop and start the studio again.
-- **Ollama local mode cannot connect:** run `ollama serve`, verify the exact tag with `ollama list`, then restart the studio.
+- **The Settings page says a key is missing:** enter it under **Settings → Online**, then click **Save & reload**.
+- **Ollama local mode cannot connect:** run `ollama serve`, verify the exact tag with `ollama list`, check the Ollama address in **Settings**, then save again.
 - **The local agent misses a step or emits a malformed tool call:** a 4B model is much less reliable than the default cloud models. Re-run planning, shorten the story, or switch back to full mode.
 - **A shot says "needs review":** the best take is still used in the film. Open the shot to see which check it failed and why.
 - **A render stopped half way:** click **Render film** (or **Re-render**) again. Shots that are already made are reused, so it carries on where it stopped.

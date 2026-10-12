@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from ..events import latest_run
 from ..story_draft import generate_story
-from . import agentnet, files, store
+from . import agentnet, config, files, store
 from .config import PROJECT, settings
 from .jobs import JobManager
 
@@ -45,6 +45,35 @@ def health():
 @app.get("/api/settings")
 def get_settings():
     return settings()
+
+
+class SettingsUpdate(BaseModel):
+    mode: Literal["full", "local"]
+    anthropic_api_key: str | None = None
+    clear_anthropic_api_key: bool = False
+    claude_model: str = "claude-opus-5"
+    claude_routine_model: str = "claude-sonnet-5"
+    openai_api_key: str | None = None
+    clear_openai_api_key: bool = False
+    openai_image_model: str = ""
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = ""
+    ollama_timeout_seconds: int = 600
+    ollama_vision_model: str = ""
+
+
+@app.put("/api/settings")
+def update_settings(body: SettingsUpdate):
+    updated = config.save_settings(body.model_dump())
+    agentnet.network.cache_clear()
+    return updated
+
+
+@app.post("/api/settings/reload")
+def reload_settings():
+    updated = config.reload_settings()
+    agentnet.network.cache_clear()
+    return updated
 
 
 # ------------------------------------------------------------ productions
