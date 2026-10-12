@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Clapperboard, Cpu, ExternalLink, FolderOpen, LayoutGrid, ListChecks, Plus, Settings } from "lucide-react";
+import { Clapperboard, Cpu, ExternalLink, FolderOpen, LayoutGrid, ListChecks, Settings } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, NavLink, Outlet } from "react-router";
 import { api, type Job } from "../lib/api";
@@ -9,7 +9,6 @@ import { ProgressBar } from "./ui";
 
 const NAV = [
   { to: "/", label: "Productions", icon: LayoutGrid, end: true },
-  { to: "/new", label: "New production", icon: Plus },
   { to: "/jobs", label: "Jobs", icon: ListChecks },
   { to: "/library", label: "Library", icon: FolderOpen },
   { to: "/settings", label: "Settings", icon: Settings },
